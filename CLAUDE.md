@@ -8,10 +8,11 @@ Analysis started 2026-10-11. Items marked **(inferred)** are not confirmed.
 
 - **The protocol is now essentially known.** Live RS-485 captures (2026-10-28) confirmed the zone card replies, the write acknowledge (non-standard 6-byte), the parameter reads, the address scan, the stack light control and the conveyor VFD (Modbus ASCII slave 1). See "Zone control card protocol", "VFD / inverter protocol" and "Live bus captures".
 - **The vendor software is unsafe and unreliable.** It re-enabled heaters after Stop Heating, its over-temperature cut-off did nothing, and it crashes often. Write-up: [vendor-software-issues.md](vendor-software-issues.md). Keep it updated.
-- **Next: build the replacement.** The plan (architecture, safety requirements, phases, hardware) is in [replacement-plan.md](replacement-plan.md). The first task is Phase 0: a read-only probe script `controller/probe.py`, run from the MacBook with an FTDI USB-RS485 adapter. Not started yet. The adapter has not been bought yet.
+- **Next: build the replacement.** The plan (architecture, safety requirements, phases, hardware) is in [replacement-plan.md](replacement-plan.md). **Phase 0 code is written and unit-tested, but not yet run on the oven** (2026-10-28): `controller/probe.py` on top of `controller/oven/` (`protocol.py`, `bus.py`). See [controller/README.md](controller/README.md) for set-up and the run procedure. It needs an FTDI USB-RS485 adapter, which has not been bought yet. Tests: `cd controller && python3 -m unittest`. Dry run: `python3 probe.py --fake`.
 - **Work happens on two Macs** that share this folder through Dropbox: a desktop Mac and a MacBook. The MacBook has Saleae Logic 2 and goes to the oven; the desktop Mac does not have Logic 2. Local Claude memory is not shared between them, so **record everything that matters in this file or the linked docs**.
 - **The user's working style:** step-by-step instructions, one step at a time, when they are at the oven or in a GUI. Check instructions against the real UI (screenshots in `R350 screen grabs/`) rather than the manual's description.
-- The project is not a git repository yet. The plan is to set it up before the controller code grows.
+- The project is a **git repository** (initialised 2026-10-28). `.gitignore` covers `.DS_Store`, `__pycache__`, `.venv`.
+- **Rule: never run `git commit` (or push) unless the user specifically asks for a commit.** When asked to *draft* a commit message, give only the text; the user makes the commit.
 
 ## Folder contents
 
