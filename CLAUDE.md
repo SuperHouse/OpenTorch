@@ -8,11 +8,12 @@ Analysis started 2026-10-11. Items marked **(inferred)** are not confirmed.
 
 - **The protocol is now essentially known.** Live RS-485 captures (2026-10-28) confirmed the zone card replies, the write acknowledge (non-standard 6-byte), the parameter reads, the address scan, the stack light control and the conveyor VFD (Modbus ASCII slave 1). See "Zone control card protocol", "VFD / inverter protocol" and "Live bus captures".
 - **The vendor software is unsafe and unreliable.** It re-enabled heaters after Stop Heating, its over-temperature cut-off did nothing, and it crashes often. Write-up: [vendor-software-issues.md](vendor-software-issues.md). Keep it updated.
-- **Next: build the replacement.** The plan (architecture, safety requirements, phases, hardware) is in [replacement-plan.md](replacement-plan.md). **Phase 0 code is written and unit-tested, but not yet run on the oven** (2026-10-28): `controller/probe.py` on top of `controller/oven/` (`protocol.py`, `bus.py`). See [controller/README.md](controller/README.md) for set-up and the run procedure. It needs an FTDI USB-RS485 adapter, which has not been bought yet. Tests: `cd controller && python3 -m unittest`. Dry run: `python3 probe.py --fake`.
+- **Next: build the replacement.** The plan (architecture, safety requirements, phases, hardware) is in [replacement-plan.md](replacement-plan.md). **Phase 0 code is written, unit-tested, and has read the oven successfully** (**Phase 0 passed 2026-11-03**: 10-minute run with zero errors; see "Phase 0 probe runs"). Next: Phase 1 (controlled writes): `controller/probe.py` on top of `controller/oven/` (`protocol.py`, `bus.py`). See [controller/README.md](controller/README.md) for set-up and the run procedure. It needs a genuine FTDI USB-RS232 adapter. **Adapter bought and checked (2026-11-03):** FTDI FT232R (VID 0x0403, PID 0x6001, bcdDevice 0x0600, serial `BH0109DI`), driven by the macOS built-in AppleUSBFTDI driver; it shows as `/dev/cu.usbserial-BH0109DI`. Genuineness was judged from the USB descriptors only (no EEPROM/clone test). **Bus connection decided (2026-10-29):** the adapter plugs into the oven's existing DE9 and the in-chassis HEXIN converter stays, so the oven wiring does not change. The reasons, the fallback (FTDI USB-RS485 on the HEXIN terminal) and the Phase 0 checks are under "Bus connection" in replacement-plan.md. Tests: `cd controller && python3 -m unittest`. Dry run: `python3 probe.py --fake`.
 - **Work happens on two Macs** that share this folder through Dropbox: a desktop Mac and a MacBook. The MacBook has Saleae Logic 2 and goes to the oven; the desktop Mac does not have Logic 2. Local Claude memory is not shared between them, so **record everything that matters in this file or the linked docs**.
 - **The user's working style:** step-by-step instructions, one step at a time, when they are at the oven or in a GUI. Check instructions against the real UI (screenshots in `R350 screen grabs/`) rather than the manual's description.
 - The project is a **git repository** (initialised 2026-10-28). `.gitignore` covers `.DS_Store`, `__pycache__`, `.venv`.
 - **Rule: never run `git commit` (or push) unless the user specifically asks for a commit.** When asked to *draft* a commit message, give only the text; the user makes the commit.
+- **Rule: do not commit Torch vendor material.** The TN software (`TN_1.1.5.7/`) and the Torch manual (PDFs and the extracted `Resources/manual.txt`) are only given out on request and are password protected, so they are in `.gitignore`. Material that the maker publishes openly, such as the Delta VFD-L manual, can be committed. Apply the same test to new third-party files.
 
 ## Folder contents
 
@@ -347,7 +348,7 @@ From `Resources/Instruction manual V1.0.1.0.pdf` (Beijing Torch Co., Ltd), text 
 
 ## Open questions
 
-- ~~Response format of `03 1000 x3`~~: **resolved 2026-10-28** by the bus capture (PV, output %, SV; see the register map). Still open: whether PV goes negative or shows a fault code with a broken thermocouple, and why zone 1 read 11 °C when the others read 16–22 °C at room temperature (SC = 0, so not the offset; it read normally when hot).
+- ~~Response format of `03 1000 x3`~~: **resolved 2026-10-28** by the bus capture (PV, output %, SV; see the register map). A broken thermocouple on a **sensor** card shows OUT = 0 and PV ≈ 1360 (2026-11-03); still open: the same on a **zone** card, and why zone 1 read 11 °C when the others read 16–22 °C at room temperature (SC = 0, so not the offset; it read normally when hot).
 - What the sensor cards' third word (375) means, and what register 0x1016 (100 on every card) is.
 - The exact meaning of `0x1022 = 0x03`, and how the XL "slope" parameter acts. What the AL2 relay outputs of the "Heating Area" card (zone 1) and the "Alarm Area" card (zone 2) drive (L314/L316/L317, the Schneider relays, the stack light?), and how the PC triggers the alarm card. How long the Stop-button off-delay lasts, and what it keeps running.
 - The card model. The hardware is now identified (see "Hardware"). Searching for `CBR371` / `DZ-FT010` may find a datasheet for the module.
@@ -406,6 +407,24 @@ From `Resources/Instruction manual V1.0.1.0.pdf` (Beijing Torch Co., Ltd), text 
   - **⚠ Vendor software bug: zones turn themselves back on after Stop Heating.** At about 1694 s, Stop Heating sent heat-off to all 12 zones, and the stack light went green. But the inspection loop kept polling, and over the next 45 s it sent **heat ON (`0x99`) again to zones 2, 5, 12, 9, 8 and 4**, each as soon as its PV dropped below SV (PV 147–149 with SV 150). These are exactly the zones seen still heating. No later heat-off was sent. The cards stopped answering at about 1853 s, when card power was removed. So in the vendor software, **Stop Heating is not safe while Inspection is running**: always click Stop Inspection first, or press the oven's red Stop. The replacement must never re-enable a zone after a stop command.
   - **VFD:** a run + 5.44 Hz at 98 s got **no replies** (the drive was probably unpowered because the oven Start had not yet been pressed **(inferred)**). At 301 s the software sent 2001H = 1 (0.01 Hz), then run, then 5.44 Hz, all acknowledged.
   - **UI interlocks:** setpoints cannot be written while heating or inspection is running. Stop Heating is disabled while Inspection runs (but see the bug above).
+
+### Phase 0 probe runs (our own code, 2026-11-03)
+
+- **First snapshot with `controller/probe.py`** through the FTDI FT232R on the oven's DE9 (HEXIN in place, vendor PC unplugged). All 16 cards and the VFD answered, and every frame was valid. **The adapter does not echo** its own bytes. The 2400 8N1 → 9600 7N2 → 2400 switching worked.
+- Zone SVs were still the Session 10 values (150, zone 3 = 120). Zone 1 again read low (12 °C against 16–21 °C).
+- **Sensor cards T2–T4 read PV ≈ 1360 with OUT = 0**, and T1 (probe fitted) read 22 °C with OUT = 100. Only socket 1 had a probe in it (confirmed by the user), so **an open thermocouple on a sensor card shows as PV ≈ 1360 and OUT = 0**. Not yet seen on a zone card.
+- VFD: status 2101H = 0x0500 (frequency and command from comms, stopped), Fcmd 5.44 Hz (left from the vendor run), DC bus 325 V, error 0.
+- **10-minute reliability run (Phase 0 done test): passed.** `probe.py --monitor 600 --log controller/probe-run.csv`, probes in all four sockets. 230 rounds, 3796 requests (16 cards per round, VFD every 2nd round, plus the echo check), **0 no reply, 0 bad frames**. Latency (request sent to the end of the reply) 37–85 ms, average 63 ms. One round (16 cards + VFD) takes about 2.6 s. Zone PVs were steady (cold oven).
+- **Socket → address confirmed:** warming the probes one at a time in socket order 1 → 4 raised T1, T2, T3, T4 in that order (to 37–40 °C).
+- **Open thermocouple, live:** T2 unplugged at 12:43:40. OUT went to 0 on the first read, and PV read 1025, 1276, 1349, 1357, 1359 over about 10 s. On reconnect, OUT went back to 100 at once and PV fell 188 → 62 → 26 → 21 over about 8 s. So **the card filters PV (a lag of a few seconds)**, and **OUT = 0 is the immediate open-input flag** on a sensor card.
+- PID parameters of all 12 zones (P / I / D / XL); OUT 100, AL1 400, AL2 0, SC 0 and 0x1016 = 100 on every card:
+
+  | Zone | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | P | 100 | 5 | 100 | 20 | 100 | 20 | 30 | 30 | 30 | 30 | 35 | 25 |
+  | I | 500 | 50 | 500 | 50 | 300 | 150 | 250 | 90 | 250 | 250 | 69 | 359 |
+  | D | 75 | 10 | 50 | 11 | 50 | 60 | 50 | 18 | 50 | 50 | 13 | 71 |
+  | XL | 950 | 1150 | 900 | 1100 | 900 | 1050 | 1000 | 1000 | 900 | 1000 | 950 | 1050 |
 
 ## Vendor software quirks (for running it safely)
 

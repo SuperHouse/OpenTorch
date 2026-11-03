@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+
+# Vendor material: copyright of the vendor, do not distribute
+TN_1.1.5.7/
+Resources/Instruction manual V1.0.1.0*.pdf
+Resources/manual.txt

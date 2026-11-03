@@ -26,12 +26,12 @@ python3 probe.py --fake        # dry run against the simulated oven
 ## Running the probe on the oven
 
 1. **Disconnect the vendor PC** (unplug its RS-232 cable from the oven's DE9). Only one master on the bus.
-2. Connect the USB-RS485 adapter: A, B and GND to the HEXIN converter's 3-way terminal (where the Saleae tap goes). Leave the Saleae tap connected if you want a capture of the probe's traffic.
+2. Plug the FTDI USB-RS232 adapter into the oven's external DE9 (the vendor PC's socket). The HEXIN converter in the chassis does the RS-485 side. Leave the Saleae tap on the HEXIN terminal if you want a capture of the probe's traffic. See "Bus connection" in [../replacement-plan.md](../replacement-plan.md).
 3. Oven: mains on, E-stop released, **press the green Start** (the cards are unpowered until then).
 4. Find the port: `python3 probe.py --list-ports`. Look for the FTDI entry (`/dev/cu.usbserial-…`).
 5. Snapshot: `python3 probe.py --port /dev/cu.usbserial-XXXX`
    - It first checks whether the adapter echoes its own bytes, then reads all 16 cards, the zone parameters and the VFD status.
-   - If every device shows "no reply", swap A and B.
+   - If every device shows "no reply": check that the green Start was pressed, and that the adapter is a straight-through DE9 (not null-modem). Then check on the Saleae capture whether the requests reach the bus. If they do not, the HEXIN may not be getting power from DTR/RTS.
 6. Reliability run (Phase 0 "done" test): `python3 probe.py --port /dev/cu.usbserial-XXXX --monitor 600 --log probe-run.csv`
    - Done when all devices read over 10 minutes with zero bad frames, and the VFD reads (every 2nd round) cause no errors on the card side.
 
