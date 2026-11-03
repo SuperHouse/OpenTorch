@@ -23,6 +23,7 @@ Analysis started 2026-10-11. Items marked **(inferred)** are not confirmed.
   - **Only one program on the serial port at a time.** Claude must not run anything on the port while the user is running a tool (a clash crashed a run on 2026-11-03).
   - Ctrl-C in `phase1.py` is safe at any time: every exit sends heat-off (zone 1 first).
 - **State the cards were left in (2026-11-03):** SV 60 on zones 2–12 (zone 3 was 120 before), zone 1 SV 5 with AL2 = 400; all zones heat-off; conveyor stopped. Harmless (nothing heats without a heat-on), but before using the vendor software, load and write the project as normal so the SVs are restored. The original values are in "Our own runs: Phase 0 and Phase 1" (snapshot) and the PID values were never changed.
+- **Raspberry Pi:** decided 2026-11-03 to keep developing on the Macs (simulator + MacBook at the oven) and move to the Pi at Phase 4. Before then, do the one-off comms check in [pi-check.md](pi-check.md) at a convenient time.
 - **Open small items:** the VFD current scale (2104H: 0.1 A or 0.01 A? check with a clamp meter); what implements the idle timer; whether zone cards show an open thermocouple like the sensor cards.
 - **Work happens on two Macs** that share this folder through Dropbox: a desktop Mac and a MacBook. The MacBook has Saleae Logic 2 and goes to the oven; the desktop Mac does not have Logic 2. Local Claude memory is not shared between them, so **record everything that matters in this file or the linked docs**.
 - **The user's working style:** step-by-step instructions, one step at a time, when they are at the oven or in a GUI. Check instructions against the real UI (screenshots in `R350 screen grabs/`) rather than the manual's description.
@@ -40,6 +41,7 @@ Analysis started 2026-10-11. Items marked **(inferred)** are not confirmed.
 - `TN_1.1.5.7/en`, `id-ID`: satellite resource DLLs (UI translations).
 - `vendor-software-issues.md`: summary of the safety and reliability problems found in the vendor software (the justification for replacing it). Update it when new problems are found.
 - `replacement-plan.md`: architecture, safety requirements, phases and hardware for the replacement controller.
+- `pi-check.md`: one-off procedure to check the comms chain from a Raspberry Pi (set-up, adapter checks, probe run on the oven). Not yet done.
 - `capture-checklist.md`: the procedure for a bus capture session (Saleae set-up, TN software steps). Section 2 is marked done (Session 8).
 - `R350 Capture/`: Saleae Logic 2 captures (`.sal` raw, `.csv` exports). `R350 bus setup.sal` holds the Logic 2 settings (open it, then Start, to reuse them). Sessions 3, 5, 8, 9 and 10 are described under "Live bus captures".
 - `tools/decode_capture.py`: decoder for the Logic 2 CSV exports (see "Live bus captures → Method").
