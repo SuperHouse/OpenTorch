@@ -125,6 +125,20 @@ class TestHeat(unittest.TestCase):
         self.assertLess(cmds.index((51, pr.CMD_HEAT_ON)), cmds.index((53, pr.CMD_HEAT_ON)))
         self.assert_all_off(oven)
 
+    def test_cutoff(self):
+        bus, oven = make_bus(read_only=False)
+        self.assertIsNone(run(bus, enable_z1=True, seconds=0.2, cutoff_after=0.1))
+        cmds = commands(oven)
+        on = cmds.index((53, pr.CMD_HEAT_ON))
+        self.assertEqual(cmds[on + 1], (51, pr.CMD_HEAT_OFF))   # zone 1 alone first
+        self.assert_all_off(oven)
+
+    def test_cutoff_needs_enable(self):
+        bus, oven = make_bus(read_only=False)
+        with self.assertRaises(ValueError):
+            run(bus, seconds=0.2, cutoff_after=0.1)
+        self.assertEqual(oven.writes, [])
+
     def test_after_phase_stops_when_bus_goes_silent(self):
         bus, oven = make_bus(read_only=False)
         real = bus.write_register

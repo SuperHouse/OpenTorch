@@ -1,6 +1,6 @@
 # R350 replacement controller: plan
 
-**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Phase 0 probe runs" in `CLAUDE.md`). Next: Phase 1. **Phase 1 tool written (2026-11-03):** `controller/phase1.py` (status, heat off, single-zone heat test with SV cap and guaranteed heat-off, stack lamp, VFD run/stop); unit-tested against the simulator, not yet run on the oven.
+**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Phase 0 probe runs" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. Remaining: a reliability run with heating on.
 **Goal:** replace the vendor "TN Series Reflow Control Systems" software (see `vendor-software-issues.md` for why) with an in-house controller on a Raspberry Pi with a 10" touchscreen mounted at the oven.
 **Protocol reference:** `CLAUDE.md` (register map, frame formats, capture results).
 
@@ -66,7 +66,7 @@ These come from `vendor-software-issues.md`.
 6. **One master on the bus.** Connect either the vendor PC or the controller, never both.
 7. **Never overwrite the per-card PID values.** They are tuned per card and differ widely (see `CLAUDE.md`, Session 8). Read and keep them.
 8. **Self-tune (`0x1022 = 0x03`) is not used** until it is understood. The manual warns that losing power during tuning can corrupt a card.
-9. **Use zone 1 as the master heater cut-off.** Zone 1's AL2 output (active while zone 1 runs with AL2 = 400) switches the heater contactor (confirmed 2026-11-03). Stop and fault paths send heat-off to zone 1 (and AL2 = 0) first, then to every other zone. Still to test: that dropping zone 1 stops another zone's heat. Zone 1 must be running for any zone to heat, and it is a single point of failure.
+9. **Use zone 1 as the master heater cut-off.** Zone 1's AL2 output (active while zone 1 runs with AL2 = 400) switches the heater contactor (confirmed 2026-11-03). Stop and fault paths send heat-off to zone 1 (and AL2 = 0) first, then to every other zone. Confirmed 2026-11-03: dropping zone 1 cuts heater mains while another zone's card is still commanding heat (its SSR stays driven but the heater gets no mains). PVs keep rising for about a minute after a stop (heat stored in the plates); over-temperature rules must allow for that. Zone 1 must be running for any zone to heat, and it is a single point of failure.
 
 ## Phases
 
