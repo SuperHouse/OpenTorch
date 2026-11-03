@@ -1,6 +1,6 @@
 # R350 replacement controller: plan
 
-**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Phase 0 probe runs" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. Remaining: a reliability run with heating on.
+**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Our own runs: Phase 0 and Phase 1" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. Remaining: a reliability run with heating on.
 **Goal:** replace the vendor "TN Series Reflow Control Systems" software (see `vendor-software-issues.md` for why) with an in-house controller on a Raspberry Pi with a 10" touchscreen mounted at the oven.
 **Protocol reference:** `CLAUDE.md` (register map, frame formats, capture results).
 

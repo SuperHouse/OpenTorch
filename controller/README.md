@@ -2,7 +2,7 @@
 
 Replacement controller for the Torch R350 reflow oven. Plan: `../replacement-plan.md`. Protocol: `../CLAUDE.md`.
 
-Current stage: **Phase 0, read-only probe.**
+Current stage: **Phase 1 done except a reliability run with heating on** (2026-11-03). Next: a multi-zone heat mode as the start of the Phase 2/3 supervisor (see "Start here" in `../CLAUDE.md`).
 
 ## Layout
 
@@ -11,6 +11,8 @@ Current stage: **Phase 0, read-only probe.**
 | `oven/protocol.py` | Frame building and parsing: card RTU (incl. the 6-byte write ack), VFD ASCII, register constants. No I/O. |
 | `oven/bus.py` | `Bus`: the only code that touches the serial port. Switches 2400 8N1 (cards) ↔ 9600 7N2 (VFD) per exchange. **Read-only unless created with `read_only=False`.** |
 | `probe.py` | Phase 0 script: snapshot or timed monitor of all cards and the VFD. Read-only. |
+| `phase1.py` | Phase 1 script: status, heat off, single-zone heat test (with zone 1 as the heater-contactor enable), master cut-off test, stack lamp, VFD run/stop, watch. See "Phase 1" below. |
+| `logs/` | CSV log of every heat test and watch run on the oven. |
 | `tests/` | Unit tests. `fake_oven.py` simulates the bus (also used by `probe.py --fake`). |
 
 ## Set-up (MacBook)

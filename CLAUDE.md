@@ -4,11 +4,26 @@ This folder holds the vendor PC control software for a Torch R350 reflow oven, s
 
 Analysis started 2026-10-11. Items marked **(inferred)** are not confirmed.
 
-## Start here (status at 2026-10-28)
+## Start here (status at 2026-11-03)
 
-- **The protocol is now essentially known.** Live RS-485 captures (2026-10-28) confirmed the zone card replies, the write acknowledge (non-standard 6-byte), the parameter reads, the address scan, the stack light control and the conveyor VFD (Modbus ASCII slave 1). See "Zone control card protocol", "VFD / inverter protocol" and "Live bus captures".
+- **The protocol is known and our own code drives the oven.** Phase 0 (read-only probe) passed and Phase 1 (controlled writes) is done except one item. Details: "Zone control card protocol", "VFD / inverter protocol", "Live bus captures" (vendor captures) and "Our own runs: Phase 0 and Phase 1" (our own runs, including all Phase 1 results).
 - **The vendor software is unsafe and unreliable.** It re-enabled heaters after Stop Heating, its over-temperature cut-off did nothing, and it crashes often. Write-up: [vendor-software-issues.md](vendor-software-issues.md). Keep it updated.
-- **Next: build the replacement.** The plan (architecture, safety requirements, phases, hardware) is in [replacement-plan.md](replacement-plan.md). **Phase 0 code is written, unit-tested, and has read the oven successfully** (**Phase 0 passed 2026-11-03**: 10-minute run with zero errors; see "Phase 0 probe runs"). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py` (procedure in controller/README.md): zone map, zone 1 = heater-contactor enable and master cut-off, 30-minute idle shutdown, conveyor run/stop. Remaining: a reliability run with heating on: `controller/probe.py` on top of `controller/oven/` (`protocol.py`, `bus.py`). See [controller/README.md](controller/README.md) for set-up and the run procedure. It needs a genuine FTDI USB-RS232 adapter. **Adapter bought and checked (2026-11-03):** FTDI FT232R (VID 0x0403, PID 0x6001, bcdDevice 0x0600, serial `BH0109DI`), driven by the macOS built-in AppleUSBFTDI driver; it shows as `/dev/cu.usbserial-BH0109DI`. Genuineness was judged from the USB descriptors only (no EEPROM/clone test). **Bus connection decided (2026-10-29):** the adapter plugs into the oven's existing DE9 and the in-chassis HEXIN converter stays, so the oven wiring does not change. The reasons, the fallback (FTDI USB-RS485 on the HEXIN terminal) and the Phase 0 checks are under "Bus connection" in replacement-plan.md. Tests: `cd controller && python3 -m unittest`. Dry run: `python3 probe.py --fake`.
+- **Key facts learned in Phase 1 (2026-11-03)**, all needed for the controller design:
+  - **Zone 1's AL2 output switches the heater contactor** (and the orange lamp). It is active only while zone 1 runs with AL2 = 400. No other zone heats without it, and **heat-off to zone 1 is a confirmed master cut-off** for all heater mains. PVs rise for about a minute after a stop (heat stored in the plates).
+  - **Idle shutdown:** the oven leaves the started state (cards and VFD unpowered, Start lamp and stack light off) about **30 minutes after the heater contactor was last in**, or after Start if it never was. Press the green Start again to continue.
+  - **Zone map:** top T1–T4 = Z1, Z3, Z5, Z7; Z9 = top convection zone over B5–B7; bottom B1–B7 = Z2, Z4, Z6, Z8, Z10, Z11, Z12 (table under "Heater layout").
+  - `0x1022` is write-only. OUT (`0x1002`) is the calculated PID output, not proof of heating. A sensor card with an open thermocouple reads PV ≈ 1360, OUT 0.
+  - **Single missed replies happen while heating** (none when cold), so the comms-loss rule needs retries and a tolerance.
+- **Next step: the last Phase 1 item, a reliability run with heating on** (several zones at a moderate SV for 20–30 min, counting missed replies, to size the comms-loss rule). It needs a multi-zone heat mode. Build it as the start of the Phase 2/3 code (a `devices` / supervisor layer with the safety rules: stop is final, zone 1 off first, comms-loss and over-temperature cut-offs) rather than as another one-off in `phase1.py`. Plan and safety requirements: [replacement-plan.md](replacement-plan.md).
+- **Code:** `controller/` (see [controller/README.md](controller/README.md) for set-up and the run procedures): `oven/protocol.py` and `oven/bus.py` (the only code that touches the port), `probe.py` (Phase 0, read-only), `phase1.py` (status, off, heat test, cut-off test, lamp, VFD, watch), `tests/` (simulator `fake_oven.py`). Tests: `cd controller && .venv/bin/python -m unittest`. Logs of every oven run: `controller/logs/` and `controller/probe-run.csv`.
+- **Running at the oven:**
+  - Adapter: genuine **FTDI FT232R** USB-RS232 (serial `BH0109DI`, shows as `/dev/cu.usbserial-BH0109DI`, macOS built-in driver) into the oven's DE9; the in-chassis HEXIN converter stays. Unplug the vendor PC (one master only). No echo.
+  - Oven: mains on, E-stop released, **green Start pressed** (cards are unpowered until then). If every device stops answering, it is probably the idle shutdown: press Start.
+  - **The venv is per machine.** `controller/.venv` was made on the desktop Mac; Dropbox syncs it but it will not work on the MacBook. If it fails there, delete it and run the set-up in the README.
+  - **Only one program on the serial port at a time.** Claude must not run anything on the port while the user is running a tool (a clash crashed a run on 2026-11-03).
+  - Ctrl-C in `phase1.py` is safe at any time: every exit sends heat-off (zone 1 first).
+- **State the cards were left in (2026-11-03):** SV 60 on zones 2–12 (zone 3 was 120 before), zone 1 SV 5 with AL2 = 400; all zones heat-off; conveyor stopped. Harmless (nothing heats without a heat-on), but before using the vendor software, load and write the project as normal so the SVs are restored. The original values are in "Our own runs: Phase 0 and Phase 1" (snapshot) and the PID values were never changed.
+- **Open small items:** the VFD current scale (2104H: 0.1 A or 0.01 A? check with a clamp meter); what implements the idle timer; whether zone cards show an open thermocouple like the sensor cards.
 - **Work happens on two Macs** that share this folder through Dropbox: a desktop Mac and a MacBook. The MacBook has Saleae Logic 2 and goes to the oven; the desktop Mac does not have Logic 2. Local Claude memory is not shared between them, so **record everything that matters in this file or the linked docs**.
 - **The user's working style:** step-by-step instructions, one step at a time, when they are at the oven or in a GUI. Check instructions against the real UI (screenshots in `R350 screen grabs/`) rather than the manual's description.
 - The project is a **git repository** (initialised 2026-10-28). `.gitignore` covers `.DS_Store`, `__pycache__`, `.venv`.
@@ -418,7 +433,7 @@ From `Resources/Instruction manual V1.0.1.0.pdf` (Beijing Torch Co., Ltd), text 
   - **VFD:** a run + 5.44 Hz at 98 s got **no replies** (the drive was probably unpowered because the oven Start had not yet been pressed **(inferred)**). At 301 s the software sent 2001H = 1 (0.01 Hz), then run, then 5.44 Hz, all acknowledged.
   - **UI interlocks:** setpoints cannot be written while heating or inspection is running. Stop Heating is disabled while Inspection runs (but see the bug above).
 
-### Phase 0 probe runs (our own code, 2026-11-03)
+### Our own runs: Phase 0 and Phase 1 (2026-11-03)
 
 - **First snapshot with `controller/probe.py`** through the FTDI FT232R on the oven's DE9 (HEXIN in place, vendor PC unplugged). All 16 cards and the VFD answered, and every frame was valid. **The adapter does not echo** its own bytes. The 2400 8N1 → 9600 7N2 → 2400 switching worked.
 - Zone SVs were still the Session 10 values (150, zone 3 = 120). Zone 1 again read low (12 °C against 16–21 °C).
@@ -462,7 +477,7 @@ From `Resources/Instruction manual V1.0.1.0.pdf` (Beijing Torch Co., Ltd), text 
 
 ## Next steps
 
-The replacement controller work is in [replacement-plan.md](replacement-plan.md) (start with Phase 0). The hardware tasks below are still open. Several can be done during Phase 1 with our own probe tool instead of the vendor software.
+The replacement controller work is in [replacement-plan.md](replacement-plan.md): Phases 0 and 1 are done except the heating reliability run (see "Start here"). The hardware tasks below are still open; several can be done with `phase1.py` instead of the vendor software.
 
 ### 1. Bus captures
 
