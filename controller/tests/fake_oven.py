@@ -16,6 +16,7 @@ class FakeOven:
         self.silent = set()      # addresses that do not answer
         self.corrupt = set()     # addresses whose replies get a bad CRC
         self.writes = []
+        self.heat_step = 1       # °C per PV read while heating (crude thermal model)
         self.cards = {}
         for addr in pr.ZONE_ADDRS + pr.SENSOR_ADDRS:
             regs = {r: 0 for r in range(0x1000, 0x1024, 2)}
@@ -64,6 +65,8 @@ class FakeOven:
         reg = frame[2] << 8 | frame[3]
         regs = self.cards[addr]
         if func == 3:
+            if reg == pr.PV and regs[pr.CMD] == pr.CMD_HEAT_ON and regs[pr.PV] < regs[pr.SV]:
+                regs[pr.PV] += self.heat_step
             count = frame[4] << 8 | frame[5]
             data = b"".join(regs.get(reg + 2 * k, 0).to_bytes(2, "big") for k in range(count))
             reply = pr.rtu_frame(addr, 3, bytes([len(data)]) + data)

@@ -1,6 +1,6 @@
 # R350 replacement controller: plan
 
-**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Phase 0 probe runs" in `CLAUDE.md`). Next: Phase 1.
+**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Phase 0 probe runs" in `CLAUDE.md`). Next: Phase 1. **Phase 1 tool written (2026-11-03):** `controller/phase1.py` (status, heat off, single-zone heat test with SV cap and guaranteed heat-off, stack lamp, VFD run/stop); unit-tested against the simulator, not yet run on the oven.
 **Goal:** replace the vendor "TN Series Reflow Control Systems" software (see `vendor-software-issues.md` for why) with an in-house controller on a Raspberry Pi with a 10" touchscreen mounted at the oven.
 **Protocol reference:** `CLAUDE.md` (register map, frame formats, capture results).
 
@@ -60,19 +60,20 @@ These come from `vendor-software-issues.md`.
 
 1. **A stop is final.** After a stop, nothing turns a heater back on until the operator explicitly starts again. This is the opposite of the vendor bug, where the patrol loop re-enabled zones after Stop Heating.
 2. **Controller over-temperature cut-off**, independent of the UI and tested. The cards also regulate themselves, but the vendor's PC-side cut-off did not work.
-3. **Communication loss turns heaters off.** If a card stops answering, or the bus fails, the controller commands all heaters off and shows a fault.
+3. **Communication loss turns heaters off.** If a card stops answering, or the bus fails, the controller commands all heaters off and shows a fault. Single missed replies do happen while heating (1–5 per few minutes on some runs, probably switching noise; 2026-11-03), so retry each read and only fault after several consecutive misses (decide the count and time from a heating reliability run).
 4. **Hardware watchdog (Phase 5).** The cards keep heating at their last command if the Pi dies, and software cannot fix that. Planned fix: a relay in the Start-latch or V1 (card/SSR-drive 12 V) circuit, held on by a heartbeat from the Pi, so heater drive power drops if the Pi stops.
 5. **Defined conveyor behaviour on fault.** The VFD keeps running if communication stops (factory default, watchdog disabled). Decide whether the controller stops the belt on a fault, or keeps it running to clear boards from the oven. Consider enabling the VFD's own comms watchdog (Pr 9-03).
 6. **One master on the bus.** Connect either the vendor PC or the controller, never both.
 7. **Never overwrite the per-card PID values.** They are tuned per card and differ widely (see `CLAUDE.md`, Session 8). Read and keep them.
 8. **Self-tune (`0x1022 = 0x03`) is not used** until it is understood. The manual warns that losing power during tuning can corrupt a card.
+9. **Use zone 1 as the master heater cut-off.** Zone 1's AL2 output (active while zone 1 runs with AL2 = 400) switches the heater contactor (confirmed 2026-11-03). Stop and fault paths send heat-off to zone 1 (and AL2 = 0) first, then to every other zone. Still to test: that dropping zone 1 stops another zone's heat. Zone 1 must be running for any zone to heat, and it is a single point of failure.
 
 ## Phases
 
 | Phase | Work | Runs on | Done when |
 |---|---|---|---|
 | **0. Probe (read-only)** | `controller/probe.py`: read PV/output/SV from all 16 cards, read the parameters of each zone, read VFD status registers 2100H–2106H. Exercises the 2400 ↔ 9600 7N2 switching. No writes. | MacBook + FTDI USB-RS232 adapter on the oven DE9 | All devices read reliably over a 10-minute run with zero CRC errors, and the switching causes no errors. **Done 2026-11-03.** |
-| **1. Controlled writes** | Single-zone tests: write a low SV, heat on/off, confirm the 6-byte ack. **Map zones to physical heaters** (heat one zone at a time and see which column warms). VFD run, speed, stop. | MacBook | Each command is confirmed on the oven, and the zone → heater map is recorded in `CLAUDE.md`. |
+| **1. Controlled writes** | Single-zone tests: write a low SV, heat on/off, confirm the 6-byte ack. **Map zones to physical heaters** (heat one zone at a time and see which column warms). VFD run, speed, stop. | MacBook | Each command is confirmed on the oven, and the zone → heater map is recorded in `CLAUDE.md`. A reliability run with heating on (missed replies seen while heating). |
 | **2. Library + simulator** | `bus` and `devices` modules with unit tests, using the recorded captures as test data. A **simulated oven** (fake cards with simple thermal behaviour) so the supervisor and UI can be developed without the oven. | Anywhere | Tests pass. The simulator runs the same code path as the real bus. |
 | **3. Controller service** | Supervisor state machine, safety rules, logging, profiles, a command-line interface. | MacBook, then Pi | A full heat-up, hold and stop on the real oven from the CLI, with the safety rules tested (stop is final, comms loss, over-temperature). |
 | **4. Web UI** | Zone tiles, controls, live chart, profiles, probe capture, fault display. | Pi + LAN | The operator can run a normal job from the touchscreen. |
@@ -125,7 +126,7 @@ The project is a git repository (since 2026-10-28).
 
 ## Open items that affect the design
 
-- **Zone → physical heater map** (Phase 1). Zones 11 and 12 may both be bottom zones, and one top zone has no visible column.
+- ~~**Zone → physical heater map**~~ **Done 2026-11-03:** top T1–T4 = zones 1, 3, 5, 7, zone 9 = top convection zone over B5–B7; bottom B1–B7 = zones 2, 4, 6, 8, 10, 11, 12 (table in `CLAUDE.md`, "Heater layout").
 - **Conveyor speed calibration:** T (minutes) ↔ F (Hz). Known points: T 20 → 5.51 Hz in the UI, and the DB `TimeP` table (4 Hz → 1815 s … 10 Hz → 360 s). Confirm against the belt speed.
 - ~~**How a broken thermocouple reports**~~ **Answered for sensor cards (2026-11-03):** OUT drops to 0 at once and PV climbs to about 1360 over about 10 s, so detect an open input from OUT = 0 or PV > 400, not from PV alone. Not yet seen on a zone card (check in Phase 1, with heat off). The card's PV is filtered (a few seconds' lag), which the over-temperature rules must allow for.
 - **Profile sensor third word = 375:** meaning unknown.
