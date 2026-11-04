@@ -2,7 +2,7 @@
 
 Replacement controller for the Torch R350 reflow oven. Plan: `../replacement-plan.md`. Protocol: `../CLAUDE.md`.
 
-Current stage: **Phase 1 done except a reliability run with heating on** (2026-11-03). The Phase 2/3 device and supervisor layers and `ovenctl.py` are written and tested on the simulator, not yet on the oven. Next: the reliability run with `ovenctl.py heat` (below).
+Current stage: **Phase 1 done** (2026-11-04). The Phase 2/3 device and supervisor layers and `ovenctl.py` work on the oven: the 30-minute all-zone reliability run at SV 100 had 0 missed replies. Next: conveyor control in the supervisor (safety rule 10 in `../replacement-plan.md`). Until then, `ovenctl.py` leaves the belt stopped, so keep its SV low.
 
 ## Layout
 
