@@ -1,6 +1,6 @@
 # R350 replacement controller: plan
 
-**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Our own runs: Phase 0 and Phase 1" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. Remaining: a reliability run with heating on.
+**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Our own runs: Phase 0 and Phase 1" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. Remaining: a reliability run with heating on. **Phases 2/3 started (2026-11-03):** `oven/devices.py`, `oven/supervisor.py` (safety rules 1, 2, 3 and 9 below) and the `ovenctl.py` CLI, tested on the simulator; the reliability run is their first use on the oven.
 **Goal:** replace the vendor "TN Series Reflow Control Systems" software (see `vendor-software-issues.md` for why) with an in-house controller on a Raspberry Pi with a 10" touchscreen mounted at the oven.
 **Protocol reference:** `CLAUDE.md` (register map, frame formats, capture results).
 
@@ -113,8 +113,10 @@ Points to check in Phase 0:
 controller/
   probe.py            Phase 0 script
   oven/bus.py         serial port, framing, baud switching
-  oven/devices.py     ZoneCard, SensorCard, Vfd
-  oven/supervisor.py  state machine, safety, profiles
+  oven/devices.py     ZoneCard, SensorCard, Vfd (exists)
+  oven/supervisor.py  state machine, safety (exists), profiles
+  oven/runlog.py      CSV run log (exists; SQLite later)
+  ovenctl.py          command line on the supervisor (exists)
   oven/sim.py         simulated oven
   oven/api.py         FastAPI app
   web/                UI (HTML/JS)

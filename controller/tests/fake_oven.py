@@ -4,6 +4,8 @@ Cards answer only when the port is at 2400 8N1, the VFD only at 9600 7N2,
 the same as on the real bus where the other baud rate reads as garbage.
 """
 
+from collections import Counter
+
 from oven import protocol as pr
 
 
@@ -15,8 +17,14 @@ class FakeOven:
         self.out = bytearray()
         self.silent = set()      # addresses that do not answer
         self.corrupt = set()     # addresses whose replies get a bad CRC
+        self.drop = Counter()    # address -> number of next requests to ignore
         self.writes = []
         self.heat_step = 1       # °C per PV read while heating (crude thermal model)
+        self.cool_step = 0       # °C per PV read while not heating, down to ambient
+        self.ambient = 20
+        # the real oven only heats while zone 1 runs with AL2 = 400 (its AL2
+        # output holds the heater contactor in); off by default for old tests
+        self.require_contactor = False
         self.cards = {}
         for addr in pr.ZONE_ADDRS + pr.SENSOR_ADDRS:
             regs = {r: 0 for r in range(0x1000, 0x1024, 2)}
@@ -61,12 +69,18 @@ class FakeOven:
     def _card(self, frame):
         if not pr.crc_ok(frame) or frame[0] not in self.cards or frame[0] in self.silent:
             return
+        if self.drop[frame[0]] > 0:
+            self.drop[frame[0]] -= 1
+            return
         addr, func = frame[0], frame[1]
         reg = frame[2] << 8 | frame[3]
         regs = self.cards[addr]
-        if func == 3:
-            if reg == pr.PV and regs[pr.CMD] == pr.CMD_HEAT_ON and regs[pr.PV] < regs[pr.SV]:
+        if func == 3 and reg == pr.PV:
+            if self.heating(addr) and regs[pr.PV] < regs[pr.SV]:
                 regs[pr.PV] += self.heat_step
+            elif not self.heating(addr) and regs[pr.PV] > self.ambient:
+                regs[pr.PV] = max(self.ambient, regs[pr.PV] - self.cool_step)
+        if func == 3:
             count = frame[4] << 8 | frame[5]
             data = b"".join(regs.get(reg + 2 * k, 0).to_bytes(2, "big") for k in range(count))
             reply = pr.rtu_frame(addr, 3, bytes([len(data)]) + data)
@@ -78,6 +92,14 @@ class FakeOven:
         if addr in self.corrupt:
             reply = reply[:-1] + bytes([reply[-1] ^ 0xFF])
         self.out += reply
+
+    def contactor(self):
+        z1 = self.cards[pr.ZONE_ADDRS[0]]
+        return z1[pr.CMD] == pr.CMD_HEAT_ON and z1[pr.AL2] > z1[pr.PV]
+
+    def heating(self, addr):
+        on = self.cards[addr][pr.CMD] == pr.CMD_HEAT_ON
+        return on and (self.contactor() or not self.require_contactor)
 
     def _vfd(self, line):
         try:

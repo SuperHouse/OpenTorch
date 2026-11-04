@@ -29,7 +29,6 @@ disconnected. Know where the red Stop / E-stop is.
 """
 
 import argparse
-import csv
 import signal
 import sys
 import time
@@ -38,6 +37,7 @@ from pathlib import Path
 
 from oven import protocol as pr
 from oven.bus import Bus, BusError
+from oven.runlog import Log
 
 MAX_TEST_SV = 100        # °C, hard cap on the heat-test setpoint
 OVERSHOOT_ABORT = 15     # °C above the test SV on the zone under test
@@ -94,34 +94,6 @@ def heat_off(bus, addrs, tries=5):
     finally:
         signal.signal(signal.SIGINT, old)
     return failed
-
-
-class Log:
-    def __init__(self, path):
-        self.f = open(path, "w", newline="") if path else None
-        self.w = csv.writer(self.f) if path else None
-        if self.w:
-            self.w.writerow(["time", "elapsed_s", "state", "device", "pv", "out", "sv", "note"])
-        self.t0 = time.monotonic()
-
-    def _row(self, state, device, vals, note=""):
-        if self.w:
-            self.w.writerow([datetime.now().strftime("%H:%M:%S.%f")[:-3],
-                             f"{time.monotonic() - self.t0:.1f}", state, device,
-                             *(vals or ("", "", "")), note])
-            self.f.flush()
-
-    def event(self, text, out=print):
-        out(f"{datetime.now():%H:%M:%S}  ** {text}")
-        self._row("event", "", None, text)
-
-    def readings(self, state, zones):
-        for addr, r in zones.items():
-            self._row(state, pr.device_name(addr), r, "" if r else "no reply")
-
-    def close(self):
-        if self.f:
-            self.f.close()
 
 
 def print_header(target, out=print):
