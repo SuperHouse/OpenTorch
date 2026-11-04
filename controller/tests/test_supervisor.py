@@ -49,7 +49,7 @@ class TestStart(unittest.TestCase):
         self.assertEqual(heat_ons(oven), [51, 52])
 
     def test_refusals_send_nothing_on(self):
-        cases = [({}, None), ({13: 60}, None), ({3: 151}, None), ({3: 0}, None),
+        cases = [({}, None), ({13: 60}, None), ({3: 281}, None), ({3: 0}, None),
                  ({3: 60}, lambda o: o.silent.add(60)),
                  ({3: 60}, lambda o: o.cards[57].__setitem__(pr.PV, 90)),
                  ({3: 60}, lambda o: o.cards[51].__setitem__(pr.PV, 1360)),
@@ -155,6 +155,16 @@ class TestStop(unittest.TestCase):
         self.assertEqual(sup.stats["Z5"]["failed"], 0)
         self.assertEqual(sup.stats["Z8"]["failed"], 1)
 
+    def test_misses_are_logged(self):
+        rows = []
+        sup, oven = make()
+        sup.log.row = lambda state, dev, vals, note="": rows.append((dev, note))
+        oven.corrupt.add(55)
+        sup.step()
+        misses = [n for d, n in rows if d == "Z5" and n.startswith("miss:")]
+        self.assertEqual(len(misses), Limits().read_tries)
+        self.assertIn("CRC", misses[0])
+
     def test_comms_loss_trips_and_retries_heat_off(self):
         sup, oven = make()
         sup.start({3: 60})
@@ -202,6 +212,123 @@ class TestStop(unittest.TestCase):
         self.assertNotIn("VFD", sup.step())
         self.assertIn("VFD", sup.step())
         self.assertEqual(sup.bus.mode, "card")
+
+
+class TestConveyor(unittest.TestCase):
+    assert_all_off = TestStart.assert_all_off
+
+    def heat_to(self, sup, oven, sv=40, **kw):
+        sup.start({3: sv}, belt_hz=5, **kw)
+        while oven.cards[53][pr.PV] < sv:
+            sup.step()
+
+    def test_belt_runs_before_any_card_setup(self):
+        sup, oven = make()
+        sup.start({3: 60}, belt_hz=5)
+        self.assertIs(sup.state, State.HEATING)
+        self.assertEqual(oven.vfd[pr.VFD_FREQ], 500)
+        self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_RUN)
+        frames = [f for _, f in oven.writes]
+        run = frames.index(pr.vfd_write_request(pr.VFD_CMD, pr.VFD_RUN))
+        self.assertLess(run, frames.index(pr.write_request(53, pr.SV, 60)))
+        self.assertLess(run, frames.index(pr.write_request(51, pr.AL2, 400)))
+        self.assertLess(run, frames.index(pr.write_request(51, pr.CMD, pr.CMD_HEAT_ON)))
+
+    def test_belt_refusals_send_nothing_on(self):
+        cases = [({3: 101}, None, None),                     # hot SV needs the belt
+                 ({3: 60}, 16, None),                        # over max_belt_hz
+                 ({3: 60}, 5, lambda o: setattr(o, "vfd_stuck", True)),
+                 ({3: 60}, 5, lambda o: setattr(o, "vfd_silent", True)),
+                 ({3: 60}, 5, lambda o: o.vfd.__setitem__(pr.VFD_ERROR, 3))]
+        for setpoints, hz, prepare in cases:
+            with self.subTest(setpoints=setpoints, hz=hz, prepare=prepare):
+                sup, oven = make()
+                if prepare:
+                    prepare(oven)
+                with self.assertRaises(Refused):
+                    sup.start(setpoints, belt_hz=hz)
+                self.assertEqual(heat_ons(oven), [])
+                self.assertEqual(oven.cards[51][pr.AL2], 0)
+                self.assertIs(sup.state, State.IDLE)
+
+    def test_refused_start_stops_belt_on_cold_oven(self):
+        sup, oven = make()
+        oven.vfd[pr.VFD_ERROR] = 3
+        with self.assertRaises(Refused):
+            sup.start({3: 60}, belt_hz=5)
+        self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_STOP)
+        self.assertIsNone(sup.belt)
+
+    def test_no_belt_allowed_at_low_sv(self):
+        sup, oven = make()
+        sup.start({3: 100})
+        self.assertIs(sup.state, State.HEATING)
+        self.assertEqual(oven.vfd[pr.VFD_CMD], 0)            # never written
+
+    def test_belt_runs_after_stop_until_cool(self):
+        sup, oven = make(limits=Limits(belt_cool_pv=30))
+        self.heat_to(sup, oven)
+        sup.stop()
+        self.assert_all_off(oven)
+        pvs = []
+        while sup.belt is not None:
+            self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_RUN)
+            sup.step()
+            pvs.append(oven.cards[53][pr.PV])
+        self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_STOP)
+        self.assertLess(pvs[-1], 30)
+        self.assertGreaterEqual(pvs[-2], 30)                 # stopped on the first cool poll
+        self.assertEqual(heat_ons(oven), [51, 53])           # stop is still final
+
+    def test_open_thermocouple_keeps_belt_running(self):
+        sup, oven = make(limits=Limits(belt_cool_pv=30))
+        self.heat_to(sup, oven)
+        sup.stop()
+        oven.cards[60][pr.PV] = 1360
+        for _ in range(40):
+            sup.step()
+        self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_RUN)
+        self.assertEqual(sup.belt, 5)
+
+    def test_belt_stopping_while_heating_trips(self):
+        for name, prepare in [
+                ("stopped", lambda o: o.vfd.__setitem__(pr.VFD_STATUS, 0x0500)),
+                ("error", lambda o: o.vfd.__setitem__(pr.VFD_ERROR, 6)),
+                ("frequency", lambda o: o.vfd.__setitem__(0x2102, 100))]:
+            with self.subTest(name):
+                sup, oven = make(limits=Limits(belt_cool_pv=10))   # below ambient
+                sup.start({3: 60}, belt_hz=5)
+                sup.step()
+                self.assertIs(sup.state, State.HEATING)
+                prepare(oven)
+                sup.step()
+                self.assertIs(sup.state, State.FAULT)
+                self.assertIn("conveyor", sup.fault)
+                self.assert_all_off(oven)
+                self.assertEqual(sup.belt, 5)                # still ours to stop when cool
+
+    def test_vfd_comms_loss_trips(self):
+        sup, oven = make()
+        sup.start({3: 60}, belt_hz=5)
+        oven.vfd_silent = True
+        for _ in range(Limits().comms_fail_polls - 1):
+            sup.step()
+        self.assertIs(sup.state, State.HEATING)              # misses are tolerated
+        sup.step()
+        self.assertIs(sup.state, State.FAULT)
+        self.assertIn("VFD", sup.fault)
+        self.assert_all_off(oven)
+
+    def test_fault_keeps_belt_running_until_cool(self):
+        sup, oven = make(limits=Limits(belt_cool_pv=30, overtemp_margin=5))
+        self.heat_to(sup, oven, sv=40)
+        oven.cards[53][pr.PV] = 50
+        sup.step()
+        self.assertIs(sup.state, State.FAULT)
+        self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_RUN)
+        while sup.belt is not None:
+            sup.step()
+        self.assertEqual(oven.vfd[pr.VFD_CMD], pr.VFD_STOP)
 
 
 if __name__ == "__main__":

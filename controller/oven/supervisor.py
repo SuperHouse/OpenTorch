@@ -18,6 +18,12 @@ Safety rules (replacement-plan.md, "Safety requirements"):
     is a fault too. After a stop PVs rise for about a minute (heat stored in
     the plates); that is only logged.
   - A heat-off that is not acked is retried every poll until it is.
+  - The conveyor runs while the oven is hot (rule 10). start() runs it before
+    any heat-on and refuses to heat unless the VFD reports running at the
+    commanded frequency with no error. While heating, a stopped belt, a VFD
+    error or VFD comms loss is a fault. After a stop or fault the belt keeps
+    running until every zone reads below `belt_cool_pv`, then it is stopped.
+    Without the belt, start() refuses any SV above `max_sv_no_belt`.
 
 The supervisor is not thread-safe: one caller drives start/stop/step.
 """
@@ -50,10 +56,13 @@ class Refused(Exception):
 
 @dataclass
 class Limits:
-    max_sv: int = 150            # °C, highest SV start() accepts
+    max_sv: int = 280            # °C, highest SV start() accepts
     overtemp_margin: int = 20    # °C above SV
     comms_fail_polls: int = 3    # failed polls in a row of one zone -> fault
     read_tries: int = 2          # reads per poll before the poll counts as failed
+    max_belt_hz: float = 15.0    # highest conveyor frequency start() accepts
+    max_sv_no_belt: int = 100    # °C, highest SV start() accepts without the conveyor
+    belt_cool_pv: int = 80       # °C, after heat-off the belt stops once every zone is below
 
 
 @contextmanager
@@ -73,7 +82,9 @@ def _no_interrupt():
 class Supervisor:
     def __init__(self, bus, limits=None, log=None, out=print, sensors=False, vfd_every=0):
         """sensors: also poll T1-T4. vfd_every: read the VFD status every N
-        polls (0 = never). Neither can raise a fault."""
+        polls (0 = never) while the supervisor is not running the belt.
+        Neither can raise a fault. While it runs the belt, the VFD is read
+        every poll."""
         self.bus = bus
         self.limits = limits or Limits()
         self.log = log or Log(None)
@@ -81,8 +92,9 @@ class Supervisor:
         self.zones = [ZoneCard(bus, n) for n in range(1, len(pr.ZONE_ADDRS) + 1)]
         self.z1 = self.zones[0]
         self.sensors = [SensorCard(bus, n) for n in range(1, 5)] if sensors else []
-        self.vfd = Vfd(bus) if vfd_every else None
+        self.vfd = Vfd(bus)
         self.vfd_every = vfd_every
+        self.belt = None             # Hz while the supervisor runs the belt, else None
         self.state = State.IDLE
         self.fault = None
         self.setpoints = {}          # zone number -> SV of the current/last run
@@ -95,10 +107,11 @@ class Supervisor:
 
     # ------------------------------------------------------------ commands
 
-    def start(self, setpoints):
+    def start(self, setpoints, belt_hz=None):
         """setpoints: {zone number: SV}. Zone 1 always runs (it holds the
         heater contactor in); if it is not in setpoints it gets SV ENABLE_SV
-        so it does not heat."""
+        so it does not heat. belt_hz: run the conveyor at this frequency
+        (None = leave it alone; only allowed up to max_sv_no_belt)."""
         if self.state is not State.IDLE:
             raise Refused(f"state is {self.state.value}"
                           + (f" ({self.fault}); reset first" if self.fault else ""))
@@ -109,6 +122,12 @@ class Supervisor:
                 raise Refused(f"no zone {zone}")
             if not 0 < sv <= self.limits.max_sv:
                 raise Refused(f"zone {zone} SV {sv} is outside 1-{self.limits.max_sv} °C")
+        if belt_hz is None:
+            if max(setpoints.values()) > self.limits.max_sv_no_belt:
+                raise Refused(f"SV above {self.limits.max_sv_no_belt} °C needs the "
+                              "conveyor running")
+        elif not 0 < belt_hz <= self.limits.max_belt_hz:
+            raise Refused(f"conveyor {belt_hz} Hz is outside 0-{self.limits.max_belt_hz} Hz")
 
         before = {}
         for z in self.zones:
@@ -129,6 +148,8 @@ class Supervisor:
         if self.pending_off:
             raise Refused("no ack to heat-off from "
                           + ", ".join(z.name for z in self.pending_off))
+        if belt_hz is not None:
+            self._start_belt(belt_hz, before)
         try:
             for zone, sv in sorted(setpoints.items()):
                 self.zones[zone - 1].set_sv(sv)
@@ -182,7 +203,8 @@ class Supervisor:
         readings = {z.name: zones[z.zone] for z in self.zones}
         for s in self.sensors:
             readings[s.name] = self._poll(s, s.read)
-        if self.vfd and self.polls % self.vfd_every == 1 % self.vfd_every:
+        if self.belt is not None or (
+                self.vfd_every and self.polls % self.vfd_every == 1 % self.vfd_every):
             readings[self.vfd.name] = self._poll(self.vfd, self.vfd.status)
         self.last.update(readings)
         self.bus_silent = not any(readings.values())
@@ -194,18 +216,23 @@ class Supervisor:
             r = readings[s.name]
             self.log.row(state, s.name, (r.pv, r.out) if r else None,
                           ("open" if r.open else "") if r else "no reply")
-        if self.vfd and self.vfd.name in readings:
+        if self.vfd.name in readings:
             r = readings[self.vfd.name]
             self.log.row(state, self.vfd.name, None, (
                 f"{r['state']} status 0x{r['status']:04X} Fcmd {r['Fcmd']:.2f} "
                 f"Fout {r['Fout']:.2f} error {r['error']}") if r else "no reply")
 
         if self.state is State.HEATING:
-            lost = [z.name for z in self.zones
-                    if self.stats[z.name]["fail_run"] >= self.limits.comms_fail_polls]
+            watched = self.zones + ([self.vfd] if self.belt is not None else [])
+            lost = [d.name for d in watched
+                    if self.stats[d.name]["fail_run"] >= self.limits.comms_fail_polls]
             if lost:
                 self._trip(f"comms loss: {', '.join(lost)} failed "
                            f"{self.limits.comms_fail_polls} polls in a row")
+        if self.state is State.HEATING and self.belt is not None:
+            problem = self._belt_problem(readings[self.vfd.name])
+            if problem:
+                self._trip(f"conveyor: {problem}")
         hot = self._over_limit(zones)
         if hot and self.state is State.HEATING:
             self._trip("over-temperature: " + "; ".join(hot))
@@ -215,6 +242,8 @@ class Supervisor:
             if new:
                 self.event("over limit while not heating (heat already off): "
                            + "; ".join(new))
+        if self.state is not State.HEATING and self.belt is not None:
+            self._stop_belt_if_cool(zones)
         return readings
 
     def _poll(self, dev, read):
@@ -223,8 +252,9 @@ class Supervisor:
         for k in range(self.limits.read_tries):
             try:
                 r = read()
-            except BusError:
+            except BusError as e:
                 st["missed"] += 1
+                self.log.row(self.state.value, dev.name, None, f"miss: {e}")
                 continue
             st["retried"] += k > 0
             st["fail_run"] = 0
@@ -256,6 +286,54 @@ class Supervisor:
                             f"({'its SV' if own else 'highest SV'} + "
                             f"{self.limits.overtemp_margin})")
         return msgs
+
+    # ------------------------------------------------------------ conveyor
+
+    def _start_belt(self, hz, zones):
+        """Run the belt and check that it runs; Refused if it does not.
+        zones: the readings before start, so a refused start on a cold oven
+        stops the belt again."""
+        self.belt = hz          # from here the belt is ours to stop when cool
+        try:
+            self.vfd.run(hz)
+            s = self.vfd.status(tries=self.limits.read_tries)
+        except BusError as e:
+            self._stop_belt_if_cool(zones)
+            raise Refused(f"conveyor: {e}") from None
+        problem = self._belt_problem(s)
+        if problem:
+            self._stop_belt_if_cool(zones)
+            raise Refused(f"conveyor: {problem}")
+        self.event(f"CONVEYOR RUN: command {s['Fcmd']:.2f} Hz, output {s['Fout']:.2f} Hz")
+
+    def _belt_problem(self, s):
+        """A VFD status reading -> what is wrong with the belt, or None.
+        No reading (a missed poll) is left to the comms-loss rule."""
+        if s is None:
+            return None
+        if s["error"]:
+            return f"VFD error code {s['error']}"
+        if s["state"] != "running":
+            return f"VFD {s['state']} (status 0x{s['status']:04X})"
+        if abs(s["Fcmd"] - self.belt) > 0.01:
+            return f"VFD command {s['Fcmd']:.2f} Hz, not {self.belt:.2f} Hz"
+        return None
+
+    def _stop_belt_if_cool(self, zones):
+        """Stop the belt once every zone answers and reads below belt_cool_pv.
+        An open thermocouple reads ~1360, so it keeps the belt running."""
+        if any(r is None for r in zones.values()):
+            return
+        hottest = max(r.pv for r in zones.values())
+        if hottest >= self.limits.belt_cool_pv:
+            return
+        try:
+            self.vfd.stop()
+        except BusError:
+            return              # tried again next poll
+        self.belt = None
+        self.event(f"CONVEYOR STOP: every zone below {self.limits.belt_cool_pv} °C "
+                   f"(hottest {hottest} °C)")
 
     # ------------------------------------------------------------ shutdown
 

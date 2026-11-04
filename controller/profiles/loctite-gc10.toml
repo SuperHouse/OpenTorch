@@ -1,0 +1,20 @@
+# Loctite GC10 (lead-free paste) on the R350.
+#
+# Target: the board profile measured by the vendor software
+# ("Loctite GC10 profile.PNG" in the project folder): ramp from ~40 to
+# ~180 °C over 50-140 s, soak ~180-195 °C to ~250 s, peak ~252 °C at ~320 s.
+#
+# UNCONFIRMED: these are the zone SVs found on the cards on 2026-10-28
+# (CLAUDE.md, Session 5), i.e. the production project loaded at the time,
+# and the belt speed the vendor's Start Transport sent (0x0220 = 5.44 Hz).
+# Check them against the vendor project before relying on this file.
+#
+# Zone positions (entry -> exit): top Z1 Z3 Z5 Z7, Z9 (convection, over
+# B5-B7); bottom Z2 Z4 Z6 Z8 Z10 Z11 Z12.
+
+name = "Loctite GC10"
+
+# zones 1-12 in order, °C (0 = zone off)
+setpoints = [180, 180, 175, 175, 170, 170, 170, 170, 160, 160, 255, 260]
+
+belt_hz = 5.44

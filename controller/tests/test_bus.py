@@ -85,7 +85,7 @@ class TestEcho(unittest.TestCase):
         self.assertEqual(bus.read_registers(51, pr.PV, 3)[0], 20)
         bus.write_register(51, pr.SV, 140)
         bus.vfd_write(pr.VFD_CMD, pr.VFD_RUN)     # reply identical to the echo
-        self.assertEqual(bus.vfd_read(pr.VFD_ERROR, 7)[1], 0x0500)
+        self.assertEqual(bus.vfd_read(pr.VFD_ERROR, 7)[1], 0x0503)   # running
         self.assertEqual(bus.read_registers(52, pr.PV, 3)[0], 20)
 
 

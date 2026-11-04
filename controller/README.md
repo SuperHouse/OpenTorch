@@ -2,7 +2,7 @@
 
 Replacement controller for the Torch R350 reflow oven. Plan: `../replacement-plan.md`. Protocol: `../CLAUDE.md`.
 
-Current stage: **Phase 1 done** (2026-11-04). The Phase 2/3 device and supervisor layers and `ovenctl.py` work on the oven: the 30-minute all-zone reliability run at SV 100 had 0 missed replies. Next: conveyor control in the supervisor (safety rule 10 in `../replacement-plan.md`). Until then, `ovenctl.py` leaves the belt stopped, so keep its SV low.
+Current stage: **Phase 1 done** (2026-11-04). The Phase 2/3 device and supervisor layers and `ovenctl.py` work on the oven: the 30-minute all-zone reliability run at SV 100 had 0 missed replies. Conveyor control (safety rule 10 in `../replacement-plan.md`) passed its oven test (2026-11-04). Next: a full heat-up at reflow temperatures.
 
 ## Layout
 
@@ -69,7 +69,11 @@ Same set-up as above. `ovenctl.py` drives the oven through the supervisor, which
 - **Comms loss:** each poll tries a read twice. A zone that fails `--fail-polls` polls in a row (default 3) while heating is a fault. Single misses are only counted.
 - **Over-temperature:** a heating zone at SV + `--margin` (default 20 °C), any other zone at the highest SV + margin, or any PV above 400 (open thermocouple) is a fault.
 - **Any fault or exit** (time up, Ctrl-C, closing the terminal) sends heat-off to zone 1, then every other zone. A heat-off that is not acked is retried every poll, and the run prints "PRESS THE OVEN'S RED STOP".
-- SV is capped at 150 °C for now.
+- **Conveyor:** runs at `--belt-hz` (default 5 Hz, max 15) from after the first heat-offs and before any card set-up. If the VFD does not then report running at that frequency with no error, the start is refused and nothing heats. While heating, a stopped belt, a VFD error or VFD comms loss (same `--fail-polls` rule) is a fault. After heat-off or a fault the belt keeps running until every zone is below `--belt-cool` (default 80 °C), then it is stopped; `heat` keeps polling until then. With the lid closed the oven cools about 1 °C per minute, so usually the oven's 30-minute idle shutdown stops the belt first; `heat` then logs that and exits. An open zone thermocouple keeps the belt running. Every missed read is logged as a `miss: <error>` row in the CSV. Ctrl-C during that cool-down leaves the belt running (the drive keeps going without comms; the oven's idle shutdown stops it, or `phase1.py vfd stop`). `--no-belt` leaves the conveyor alone and is only accepted up to SV 100.
+- SV is capped at 280 °C (raised from 150 on 2026-11-04 for reflow runs).
+- **Profiles:** `heat --profile profiles/NAME.toml` instead of `--sv` sets each zone's SV and the belt speed from a file (`setpoints` = 12 values, zones 1–12 in order, 0 = off; `belt_hz`; `--belt-hz` overrides it). `profiles/loctite-gc10.toml` holds the production project found on the cards on 2026-10-28, **not yet confirmed** as the GC10 settings.
+
+**Reflow profile run** (next; Phase 3 done test): lid closed, belt clear, no boards, the oven attended for the whole run. `heat --profile profiles/loctite-gc10.toml --minutes 20`. It heats to the profile SVs (expect 10–20 min to settle; the 255/260 zones take longest), holds, stops, and cools with the belt running until the idle shutdown. Record the heat-up time, overshoot and hold band per zone, and any `miss:` rows. Optional: run a probe through the oven on T1 during the hold to compare with `Loctite GC10 profile.PNG`.
 
 Commands:
 
@@ -77,4 +81,6 @@ Commands:
 2. `python3 ovenctl.py --port P off`: heat-off to all zones, zone 1 first, then Z1 AL2 = 0.
 3. `python3 ovenctl.py --port P heat --sv 100 --zones all --minutes 30`: heats, holds, stops, then watches for 2 minutes (`--after`). It logs to `logs/run-<time>.csv`, polls T1–T4 (`--no-sensors` to skip) and reads the VFD every 5th poll (`--vfd-every`), then prints the missed replies per device. Exit status 2 on a fault.
 
-**The reliability run** (the last Phase 1 item): `heat --sv 100 --zones all --minutes 30`. Keep the lid closed and the belt clear. Record the "Missed replies" table: the `missed` column is single misses (retried), `failed` is polls where both tries failed, and `max run` is the longest run of failed polls. These numbers size the comms-loss rule. If a comms-loss fault stops the run early, that is a result too: note it and rerun with a larger `--fail-polls` to finish the measurement.
+**Conveyor oven test** (done 2026-11-04; the lid had to be opened to reach 60 °C before the idle shutdown): belt clear, lid closed. `heat --sv 100 --zones all --minutes 10 --belt-cool 60`. Check: the belt starts before the contactor clunks in, the `belt` column shows the output frequency, the belt keeps running after heat-off and stops by itself at "CONVEYOR STOP". Optional fault test: the drive's STOP/RUN switch does nothing in REMOTE mode, so it cannot stop the belt. To test the VFD comms-loss path instead: during the hold, unplug the RS-485 RJ-11 from the drive. Expect "comms loss: VFD" after 3 polls (about 7 s), heat-off, and the belt still running (the drive keeps its last command). Plug it back in; the cool-down then stops the belt as usual.
+
+**The reliability run** (done 2026-11-04): `heat --sv 100 --zones all --minutes 30`. Keep the lid closed and the belt clear. Record the "Missed replies" table: the `missed` column is single misses (retried), `failed` is polls where both tries failed, and `max run` is the longest run of failed polls. These numbers size the comms-loss rule. If a comms-loss fault stops the run early, that is a result too: note it and rerun with a larger `--fail-polls` to finish the measurement.

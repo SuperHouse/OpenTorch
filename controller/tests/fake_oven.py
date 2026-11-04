@@ -35,6 +35,8 @@ class FakeOven:
         self.vfd = {r: 0 for r in range(0x2000, 0x2003)}
         self.vfd.update({r: 0 for r in range(0x2100, 0x2107)})
         self.vfd[pr.VFD_STATUS] = 0x0500
+        self.vfd_stuck = False   # True: the drive acks a run command but does not run
+        self.vfd_silent = False
 
     # --- serial.Serial interface used by Bus
     def apply_settings(self, d):
@@ -106,7 +108,7 @@ class FakeOven:
             raw = pr.parse_ascii(line)
         except ValueError:
             return
-        if raw[0] != pr.VFD_SLAVE:
+        if raw[0] != pr.VFD_SLAVE or self.vfd_silent:
             return
         func, reg, val = raw[1], raw[2] << 8 | raw[3], raw[4] << 8 | raw[5]
         if func == 3:
@@ -114,4 +116,11 @@ class FakeOven:
             self.out += pr.ascii_frame(pr.VFD_SLAVE, 3, bytes([len(data)]) + data)
         elif func == 6:
             self.vfd[reg] = val
+            if reg == pr.VFD_FREQ:
+                self.vfd[0x2102] = val               # Fcmd
+            elif reg == pr.VFD_CMD and not self.vfd_stuck:
+                # status bits 0-1: 3 = running, 0 = stopped (no ramps modelled)
+                run = val == pr.VFD_RUN
+                self.vfd[pr.VFD_STATUS] = self.vfd[pr.VFD_STATUS] & ~3 | (3 if run else 0)
+                self.vfd[0x2103] = self.vfd[0x2102] if run else 0
             self.out += line                         # Delta echoes a write

@@ -3,7 +3,7 @@
 
   ovenctl.py --port P status                  zone PV/OUT/SV, sensors, VFD (read only)
   ovenctl.py --port P off                     heat off to every zone, zone 1 first
-  ovenctl.py --port P heat --sv 100 [--zones 1-12] [--minutes 30]
+  ovenctl.py --port P heat --sv 100 [--zones 1-12] [--minutes 30] [--belt-hz 5]
                                               heat zones, hold, stop; report missed replies
   ovenctl.py --fake ...                       the same against the simulated oven
 
@@ -11,14 +11,20 @@ The safety rules are in oven/supervisor.py. Every exit (time up, fault,
 Ctrl-C, closing the terminal, an error) sends heat-off to zone 1 first, then
 every other zone. The SVs stay on the cards afterwards.
 
+The conveyor runs from before heat-on until every zone is below the cool-down
+temperature (--belt-cool); after heat-off the program keeps polling until
+then. If it is stopped earlier (Ctrl-C), the belt is left running: the drive
+keeps running without comms, and the oven's idle shutdown stops it.
+
 Before running: oven mains on, E-stop released, green Start pressed, vendor PC
-disconnected. Know where the red Stop / E-stop is.
+disconnected, belt clear. Know where the red Stop / E-stop is.
 """
 
 import argparse
 import signal
 import sys
 import time
+import tomllib
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +35,7 @@ from oven.supervisor import Limits, Refused, State, Supervisor
 
 LOG_DIR = Path(__file__).parent / "logs"
 PERIOD = 2.0     # s between poll rounds
+BELT_HZ = 5.0    # conveyor frequency while hot (tested 2026-11-03)
 
 
 def parse_zones(text):
@@ -42,9 +49,27 @@ def parse_zones(text):
     return sorted(zones)
 
 
+def load_profile(path):
+    """A profile TOML file -> (name, {zone: SV}, belt Hz or None).
+    `setpoints` lists all 12 zones in order; 0 leaves a zone off. The SV
+    limits are checked by Supervisor.start()."""
+    with open(path, "rb") as f:
+        p = tomllib.load(f)
+    svs = p.get("setpoints")
+    if not isinstance(svs, list) or len(svs) != len(pr.ZONE_ADDRS) \
+            or not all(isinstance(sv, int) and sv >= 0 for sv in svs):
+        raise ValueError(f"{path}: setpoints must list {len(pr.ZONE_ADDRS)} whole "
+                         "numbers, zones 1-12 in order (0 = zone off)")
+    hz = p.get("belt_hz")
+    if hz is not None and not isinstance(hz, (int, float)):
+        raise ValueError(f"{path}: belt_hz must be a number")
+    return (p.get("name", Path(path).stem),
+            {z: sv for z, sv in enumerate(svs, 1) if sv}, hz)
+
+
 def print_header(sup, out=print):
     names = [z.name for z in sup.zones] + [s.name for s in sup.sensors]
-    out("time      t(s)  state  " + " ".join(f"{n:>5}" for n in names))
+    out("time      t(s)  state  " + " ".join(f"{n:>5}" for n in names) + "   belt")
 
 
 def print_row(sup, readings, t0, out=print):
@@ -53,8 +78,10 @@ def print_row(sup, readings, t0, out=print):
     for n in names:
         r = readings.get(n)
         cells.append("--" if r is None else "open" if getattr(r, "open", False) else r.pv)
+    v = readings.get(sup.vfd.name, "")
+    belt = "--" if v is None else f"{v['Fout']:.2f}" if v else ""
     out(f"{datetime.now():%H:%M:%S} {time.monotonic() - t0:5.0f}  {sup.state.value:<5}  "
-        + " ".join(f"{c:>5}" for c in cells))
+        + " ".join(f"{c:>5}" for c in cells) + f"  {belt:>5}")
 
 
 def run(sup, seconds, until=None, period=PERIOD, out=print):
@@ -69,30 +96,52 @@ def run(sup, seconds, until=None, period=PERIOD, out=print):
         time.sleep(max(0.0, period - (time.monotonic() - t)))
 
 
-def heat(sup, setpoints, seconds, after, period=PERIOD, out=print):
-    """Start, hold for `seconds`, stop, then watch for `after` seconds.
+def heat(sup, setpoints, seconds, after, period=PERIOD, out=print, belt_hz=None):
+    """Start, hold for `seconds`, stop, then watch for at least `after`
+    seconds and until the belt has been stopped after cool-down.
     Returns the fault, or None."""
     print_header(sup, out)
     sup.step()
     try:
-        sup.start(setpoints)
+        sup.start(setpoints, belt_hz)
         if sup.state is State.HEATING:
             run(sup, seconds, lambda s: s.state is not State.HEATING, period, out)
     finally:
         sup.stop("end of run" if sup.state is State.HEATING else "exit")
-    if after > 0:
-        try:
-            silent = []
+        if sup.belt is not None and sys.exc_info()[0] is not None:
+            belt_left_running(sup)
+    if after > 0 or sup.belt is not None:
+        end = time.monotonic() + after
+        silent = []
+        full = []        # zone readings of the last poll that every zone answered
 
-            def stop_watch(s):
-                silent.append(s.bus_silent)
-                return len(silent) >= 3 and all(silent[-3:])
-            run(sup, after, stop_watch, period, out)
+        def stop_watch(s):
+            silent.append(s.bus_silent)
+            zones = [s.last.get(z.name) for z in s.zones]
+            if all(zones):
+                full[:] = zones
+            if len(silent) >= 3 and all(silent[-3:]):
+                return True
+            return s.belt is None and time.monotonic() >= end
+        try:
+            run(sup, float("inf"), stop_watch, period, out)
             if len(silent) >= 3 and all(silent[-3:]):
                 sup.event("bus silent: oven no longer started")
+                if sup.belt is not None:
+                    pvs = [r.pv for r in full]
+                    sup.event("cool-down ended by the oven's idle shutdown, which stops "
+                              "the belt" + (f" (hottest zone {max(pvs)} °C at the last "
+                                            "full poll)" if pvs else ""))
         except KeyboardInterrupt:
             sup.event("after-watch stopped (Ctrl-C); heat was already off")
+            if sup.belt is not None:
+                belt_left_running(sup)
     return sup.fault
+
+
+def belt_left_running(sup):
+    sup.event("CONVEYOR LEFT RUNNING (cool-down not finished). It stops at the oven's "
+              "idle shutdown, or stop it with: phase1.py --port P vfd stop")
 
 
 def status(sup, out=print):
@@ -137,11 +186,24 @@ def main():
     sub.add_parser("status")
     sub.add_parser("off")
     p = sub.add_parser("heat")
-    p.add_argument("--sv", type=int, required=True,
-                   help=f"setpoint for every zone, °C (max {Limits.max_sv})")
-    p.add_argument("--zones", default="all", help="e.g. all, 1-12, 2,4,6 (default all)")
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--sv", type=int,
+                       help=f"setpoint for every zone in --zones, °C (max {Limits.max_sv})")
+    which.add_argument("--profile", help="TOML file with per-zone setpoints and belt speed "
+                                         "(see profiles/)")
+    p.add_argument("--zones", default="all",
+                   help="with --sv: e.g. all, 1-12, 2,4,6 (default all)")
     p.add_argument("--minutes", type=float, default=30, help="hold time (default 30)")
-    p.add_argument("--after", type=float, default=120, help="seconds to watch after heat off")
+    p.add_argument("--after", type=float, default=120,
+                   help="seconds to watch after heat off, at least (default 120)")
+    p.add_argument("--belt-hz", type=float,
+                   help=f"conveyor frequency while hot (default: the profile's, else "
+                        f"{BELT_HZ}; max {Limits.max_belt_hz})")
+    p.add_argument("--no-belt", action="store_true",
+                   help=f"leave the conveyor alone (SV up to {Limits.max_sv_no_belt} °C only)")
+    p.add_argument("--belt-cool", type=int, default=Limits.belt_cool_pv,
+                   help="after heat off, stop the belt once every zone is below this, °C "
+                        f"(default {Limits.belt_cool_pv})")
     p.add_argument("--margin", type=int, default=Limits.overtemp_margin,
                    help="over-temperature margin above SV, °C")
     p.add_argument("--fail-polls", type=int, default=Limits.comms_fail_polls,
@@ -182,20 +244,31 @@ def main():
         elif args.cmd == "off":
             Supervisor(bus).stop("off command")
         elif args.cmd == "heat":
-            zones = parse_zones(args.zones)
-            setpoints = {z: args.sv for z in zones}
-            if not confirm(f"Heat zone(s) {args.zones} to {args.sv} °C and hold for "
-                           f"{args.minutes} min" + ("" if 1 in zones else
-                                                    " (zone 1 runs as the enable only)")
-                           + ".", args.yes):
+            if args.profile:
+                name, setpoints, profile_hz = load_profile(args.profile)
+                what = f"Run profile '{name}': " + ", ".join(
+                    f"Z{z} {sv}" for z, sv in setpoints.items()) + " °C,"
+            else:
+                setpoints = {z: args.sv for z in parse_zones(args.zones)}
+                profile_hz = None
+                what = f"Heat zone(s) {args.zones} to {args.sv} °C"
+            belt_hz = None if args.no_belt else args.belt_hz or profile_hz or BELT_HZ
+            belt = ("Conveyor: NOT RUN." if belt_hz is None else
+                    f"Conveyor runs at {belt_hz} Hz from before heat-on until every "
+                    f"zone is below {args.belt_cool} °C: the belt must be clear.")
+            if not confirm(f"{what} and hold for {args.minutes} min"
+                           + ("" if 1 in setpoints else " (zone 1 runs as the enable only)")
+                           + f".\n{belt}", args.yes):
                 return
             LOG_DIR.mkdir(exist_ok=True)
             path = args.log or LOG_DIR / f"run-{datetime.now():%Y%m%d-%H%M}.csv"
             log = Log(path)
-            limits = Limits(overtemp_margin=args.margin, comms_fail_polls=args.fail_polls)
+            limits = Limits(overtemp_margin=args.margin, comms_fail_polls=args.fail_polls,
+                            belt_cool_pv=args.belt_cool)
             sup = Supervisor(bus, limits, log, sensors=args.sensors, vfd_every=args.vfd_every)
             try:
-                fault = heat(sup, setpoints, args.minutes * 60, args.after, args.period)
+                fault = heat(sup, setpoints, args.minutes * 60, args.after, args.period,
+                             belt_hz=belt_hz)
             except KeyboardInterrupt:
                 print("\nstopped; heat-off was sent (see above)", file=sys.stderr)
                 fault = None
