@@ -1,14 +1,22 @@
-# OPENTORCH
+# OpenTorch Reflow Oven Controller
 
 An Open Source replacement control system for the **Torch R350** reflow oven. According to the [Torch R350 product page](http://www.torchsmt.com/R350-Desk-type-reflow-oven-pd52092.html) it's supposed to be a 12-zone (6-top, 6-bottom) oven, but mine is actually a slightly more complicated setup with 12 zones configured as 5-top, 7-bottom with the final top zone being a convection zone that spans the final 3 bottom zones. I don't know why it's different to their website, but it's how mine was built! Mine is the 3-phase version.
 
-Torch reflow ovens are very well made, with solid mechanical structure, well engineered parts, and a robust electrical system using good quality Modbus modules, 40A rated SSRs, braided high-current cable, genuine Schneider Electric contactors, and Meanwell power supplies. Torch didn't skimp on quality! You can see it everywhere in the hardware. And the chassis is HEAVY. Rock solid.
+Torch reflow ovens are very well made, with solid mechanical structure, well engineered parts, and a robust electrical system using good quality Modbus modules, 40A rated SSRs, braided cable for the high-current loads, genuine Schneider Electric contactors, and Meanwell power supplies. Torch didn't skimp on quality! You can see it everywhere in the hardware. And the chassis is HEAVY. Rock solid.
+
+![Modbus cards](media/torch-r350-modbus.jpg)
 
 They even labelled all the SSRs and internal cables that the customer should never see!
+
+![Top-zone SSRs](media/torch-r350-ssrs.jpg)
 
 I only have personal experience with the R350 model so I don't know what other models are like, but I can't fault the attention to detail that I've seen in mine.
 
 However, the control software is a different story. The R350 is typically controlled from a PC by the vendor's software which is copy-protected using a USB dongle, runs on old 32-bit Windows7 that's out of security support, crashes frequently, and has safety faults. For example it can silently switch heaters back on after the operator clicks the "Stop Heating" button, and its over-temperature cut-off did not work in my testing.
+
+Just using the software it's common to have it lose the ability to connect to its own COM port, and then fail to recover so the entire PC needs rebooting which leaves the oven running in an unsupervised state until the computer is running again and the software reconnects.
+
+![Torch software on Windows 7](media/torch-r350-software.png)
 
 This project is a result of my work to reverse-engineer the control system and build my own, so that I can control the oven directly using a simple touch-screen interface without requiring the external Windows PC to be connected.
 
