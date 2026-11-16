@@ -7,7 +7,9 @@
 # UNCONFIRMED: these are the zone SVs found on the cards on 2026-10-28
 # (CLAUDE.md, Session 5), i.e. the production project loaded at the time,
 # and the belt speed the vendor's Start Transport sent (0x0220 = 5.44 Hz).
-# Check them against the vendor project before relying on this file.
+# The screenshot was left by the oven's previous owner and is NOT trusted,
+# and the vendor database holds no matching project (checked 2026-11-16).
+# Treat this file as a controller test set, not a verified reflow profile.
 #
 # Zone positions (entry -> exit): top Z1 Z3 Z5 Z7, Z9 (convection, over
 # B5-B7); bottom Z2 Z4 Z6 Z8 Z10 Z11 Z12.

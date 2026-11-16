@@ -135,3 +135,35 @@ The project is a git repository (since 2026-10-28).
 - **Profile sensor third word = 375:** meaning unknown.
 - **Zone 1 reads low when cold** (11 °C against 16–22 °C) but tracked normally when hot.
 - **What drives the red lamp / buzzer** (the "Alarm Area" card, zone 2, AL2?). Needed if the controller should sound an alarm.
+
+## Open decision: controller platform (review before Phase 4)
+
+**Raised 2026-11-16, not decided.** The plan above assumes a Raspberry Pi with a browser UI. The alternative is a microcontroller with a built-in touchscreen, for example the Waveshare ESP32-P4-WIFI6-Touch-LCD-8 (8" 800 × 1280 MIPI-DSI, capacitive touch, 32 MB flash, 32 MB PSRAM, TF slot, ESP32-C6 for Wi-Fi 6 / BLE, metal case, about US$83, rated 0–60 °C, no RS-485 port). **Review this before any Phase 4 work starts**, because Phase 4 (FastAPI + web UI) is the first platform-specific work. Phases 0–3 are not affected: the protocol knowledge, safety rules and supervisor logic carry over to either platform, and the Python simulator and decoder stay useful as test tools.
+
+**For the ESP32-P4:**
+
+- The load is small: 2400 baud, 16 devices, a poll round of about 2.4 s, and the PID runs on the cards. A microcontroller does this easily and with more predictable timing than Linux.
+- **Better serial path.** The ESP32 UARTs do 7N2 and fast baud changes natively, with no USB adapter or driver (the vendor PC's adapter driver caused the Session 9 crashes). The UART's RS-485 half-duplex mode drives the transceiver enable in hardware, which removes the turnaround-timing objection that ruled out "Pi UART + RS485-TTL module" (see "Bus connection"). An isolated transceiver (e.g. ADM2587E) on the HEXIN's 3-way terminal would also remove the HEXIN and the DE9 cable from the chain.
+- **Simpler safety.** On-chip hardware watchdog, no OS updates, no kiosk browser to hang. The Phase 5 watchdog relay becomes one GPIO toggled by the main loop.
+- Instant boot and no Linux filesystem to damage on power loss. (Boot time matters little: the oven needs 40–60 min to warm up. Surviving power loss is the real gain.)
+- **Easier for other R350 owners.** One board to flash is easier to reproduce than a Pi set-up. This is the strongest argument if OpenTorch is meant for others. For our one oven it is much weaker.
+- Issues #2 (MQTT) and #3 (RGB LED strip) suit either platform; the ESP32 drives a NeoPixel strip directly (RMT peripheral).
+
+**Against, and how large each item really is:**
+
+- **Storage is smaller than it looks.** A profile is 12 SVs and a belt speed (tens of bytes): NVS or LittleFS on the 32 MB flash, both safe through power loss. A 30-minute run log at the current poll rate is about 750 rows × ~100 bytes ≈ 75 KB, so hundreds of runs fit in flash, and they can be downloaded over Wi-Fi. **Trap:** FAT on an SD card is *more* likely to be damaged by a power cut than ext4 on a Pi. Logging to the TF card would lose the "no filesystem to damage" advantage, so log to LittleFS or over the network.
+- **The UI is the real cost.** A touch UI with zone tiles and a live chart is clearly more work in LVGL than in HTML/JS, and every change means a rebuild and a reflash. Remote viewing is possible (a small web page served over the C6's Wi-Fi, with live updates over WebSocket) but it is a second UI to maintain.
+- **Slower development loop:** build, flash and debug on the device instead of running Python against the simulator. Keep the supervisor in plain C/C++ with no hardware dependencies, so its unit tests can run on the Mac against a simulator.
+- **Hardware:** no RS-485 port on the board (use the 40-pin header and our own transceiver). If the HEXIN stays, it is probably powered from DTR/RTS, which a MAX3232 interface would need to drive. Do not mount the board on a hot panel (the same applies to a Pi).
+- **Porting effort is modest:** about 1,900 lines of Python in all, of which `bus`, `devices` and `supervisor` (about 750) are the controller logic.
+- Cost (about US$83 against AU$250–350 for a Pi 5, a 10" screen and accessories) is not significant for one oven.
+
+**The cheaper fix if power-loss damage is the main worry:** keep the Pi with a read-only root filesystem (overlay filesystem, a `raspi-config` option). A hardware watchdog (safety rule 4) is needed on either platform, because the cards keep heating at their last command if the controller dies.
+
+**Suggested process:**
+
+1. Finish Phase 3 in Python as planned (the GC10 profile run and the safety tests). This proves the logic on whichever platform wins.
+2. A time-boxed trial on the ESP32-P4 board (2–3 days): port the bus layer and repeat the Phase 0 done test (10 minutes, all 16 cards plus VFD switching, 0 missed replies), and make an LVGL mock-up of the zone-tile screen to measure the UI cost.
+3. Decide before Phase 4. Switch if the trial goes smoothly and builds by other R350 owners are a goal; otherwise stay on the Pi with a read-only root.
+
+**The key question for the review:** is OpenTorch meant to be built by other R350 owners, or only to run our oven?
