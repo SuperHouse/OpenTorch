@@ -2,6 +2,8 @@
 
 An Open Source replacement control system for the **Torch R350** reflow oven. According to the [Torch R350 product page](http://www.torchsmt.com/R350-Desk-type-reflow-oven-pd52092.html) it's supposed to be a 12-zone (6-top, 6-bottom) oven, but mine is actually a slightly more complicated setup with 12 zones configured as 5-top, 7-bottom with the final top zone being a convection zone that spans the final 3 bottom zones. I don't know why it's different to their website, but it's how mine was built! Mine is the 3-phase version.
 
+![R350 heater zones](media/zone-positions.svg)
+
 Torch reflow ovens are very well made, with solid mechanical structure, well engineered parts, and a robust electrical system using good quality Modbus modules, 40A rated SSRs, braided cable for the high-current loads, genuine Schneider Electric contactors, and Meanwell power supplies. Torch didn't skimp on quality! You can see it everywhere in the hardware. And the chassis is HEAVY. Rock solid.
 
 ![Modbus cards](media/torch-r350-modbus.jpg)

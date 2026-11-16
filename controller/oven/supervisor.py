@@ -13,8 +13,12 @@ Safety rules (replacement-plan.md, "Safety requirements"):
   - Comms loss: a zone that fails `comms_fail_polls` polls in a row while
     heating (each poll is `read_tries` reads) is a fault. Single misses
     happen while heating (switching noise), so they are only counted.
-  - Over-temperature: a heating zone at SV + margin, or any other zone at the
-    highest SV + margin, is a fault. PV above OPEN_TC_PV (open thermocouple)
+  - Over-temperature: a heating zone at the highest SV among itself and its
+    physical neighbours (ZONE_NEIGHBOURS) + margin, or any other zone at the
+    highest SV + margin, is a fault. Neighbours count because a zone next to
+    a hotter one is heated past its own SV (Z9/Z10 at 160 beside Z11/Z12 at
+    255/260 in the production SVs); a card that keeps heating is still caught,
+    later for such a zone. PV above OPEN_TC_PV (open thermocouple)
     is a fault too. After a stop PVs rise for about a minute (heat stored in
     the plates); that is only logged.
   - A heat-off that is not acked is retried every poll until it is.
@@ -42,6 +46,25 @@ from .devices import AL2_HEAT, OPEN_TC_PV, SensorCard, Vfd, ZoneCard
 from .runlog import Log
 
 ENABLE_SV = 5   # °C, zone 1 SV when it runs only as the heater-contactor enable
+
+# Zones whose heat reaches each zone: the same column (top/bottom) and the
+# columns either side. Layout (CLAUDE.md, "Heater layout"), entry -> exit:
+#   top     Z1  Z3  Z5  Z7  [------ Z9 ------]
+#   bottom  Z2  Z4  Z6  Z8  Z10   Z11   Z12
+ZONE_NEIGHBOURS = {
+    1: (2, 3, 4),
+    2: (1, 3, 4),
+    3: (1, 2, 4, 5, 6),
+    4: (1, 2, 3, 5, 6),
+    5: (3, 4, 6, 7, 8),
+    6: (3, 4, 5, 7, 8),
+    7: (5, 6, 8, 9, 10),
+    8: (5, 6, 7, 9, 10),
+    9: (7, 8, 10, 11, 12),
+    10: (7, 8, 9, 11),
+    11: (9, 10, 12),
+    12: (9, 11),
+}
 
 
 class State(Enum):
@@ -279,12 +302,18 @@ class Supervisor:
                 continue
             if not setpoints:
                 continue
-            own = heating and n in setpoints
-            limit = (setpoints[n] if own else top) + self.limits.overtemp_margin
+            if heating and n in setpoints:
+                near = {n: setpoints[n]} | {m: setpoints[m] for m in ZONE_NEIGHBOURS[n]
+                                            if m in setpoints}
+                hottest = max(near, key=lambda m: (near[m], m == n))
+                limit = near[hottest]
+                why = "its SV" if hottest == n else f"SV of neighbour Z{hottest}"
+            else:
+                limit, why = top, "highest SV"
+            limit += self.limits.overtemp_margin
             if r.pv >= limit:
                 msgs.append(f"{name} PV {r.pv} >= {limit} "
-                            f"({'its SV' if own else 'highest SV'} + "
-                            f"{self.limits.overtemp_margin})")
+                            f"({why} + {self.limits.overtemp_margin})")
         return msgs
 
     # ------------------------------------------------------------ conveyor

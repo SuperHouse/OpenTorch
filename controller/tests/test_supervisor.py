@@ -133,6 +133,47 @@ class TestStop(unittest.TestCase):
         self.assertIs(sup.state, State.FAULT)
         self.assertIn("Z10", sup.fault)
 
+    def test_overtemp_allows_heat_from_hotter_neighbour(self):
+        # the production SVs: Z9/Z10 at 160 beside Z11/Z12 at 255/260
+        svs = dict(zip(range(1, 13), [180, 180, 175, 175, 170, 170, 170, 170,
+                                      160, 160, 255, 260]))
+        sup, oven = make()
+        sup.start(svs, belt_hz=5)
+        oven.cards[59][pr.PV] = 230                          # Z9: limit 260 + 20
+        oven.cards[60][pr.PV] = 230                          # Z10: limit 255 + 20
+        sup.step()
+        self.assertIs(sup.state, State.HEATING, sup.fault)
+        oven.cards[59][pr.PV] = 280
+        sup.step()
+        self.assertIs(sup.state, State.FAULT)
+        self.assertIn("Z9 PV 280 >= 280 (SV of neighbour Z12 + 20)", sup.fault)
+
+    def test_overtemp_own_sv_when_no_hotter_neighbour(self):
+        svs = dict(zip(range(1, 13), [180, 180, 175, 175, 170, 170, 170, 170,
+                                      160, 160, 255, 260]))
+        sup, oven = make()
+        sup.start(svs, belt_hz=5)
+        oven.cards[52][pr.PV] = 200                          # Z2: own SV 180 is the highest
+        sup.step()
+        self.assertIs(sup.state, State.FAULT)
+        self.assertIn("Z2 PV 200 >= 200 (its SV + 20)", sup.fault)
+
+    def test_overtemp_ignores_neighbours_not_heating(self):
+        sup, oven = make(limits=Limits(overtemp_margin=10))
+        sup.start({9: 60})                                   # Z11/Z12 not in the run
+        oven.cards[59][pr.PV] = 70
+        sup.step()
+        self.assertIs(sup.state, State.FAULT)
+        self.assertIn("Z9 PV 70 >= 70 (its SV + 10)", sup.fault)
+
+    def test_neighbour_map_is_symmetric(self):
+        from oven.supervisor import ZONE_NEIGHBOURS
+        self.assertEqual(set(ZONE_NEIGHBOURS), set(range(1, 13)))
+        for z, near in ZONE_NEIGHBOURS.items():
+            self.assertNotIn(z, near)
+            for m in near:
+                self.assertIn(z, ZONE_NEIGHBOURS[m], f"Z{z} -> Z{m}")
+
     def test_open_thermocouple_trips(self):
         sup, oven = make()
         sup.start({3: 60})
