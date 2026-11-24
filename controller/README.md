@@ -25,6 +25,7 @@ Current stage: **Phase 1 done** (2026-11-04). The Phase 2/3 device and superviso
 
 ```sh
 cd controller
+mkdir .venv && xattr -w com.dropbox.ignored 1 .venv   # keep the venv out of Dropbox (per-machine)
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 python3 -m unittest            # all tests should pass

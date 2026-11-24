@@ -1,6 +1,6 @@
 # R350 replacement controller: plan
 
-**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Our own runs: Phase 0 and Phase 1" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. **Phase 1 done (2026-11-04):** 30-minute reliability run with all 12 zones heating to SV 100 through `ovenctl.py`: 12,131 replies, 0 missed, 0 bad frames. **Phases 2/3 started (2026-11-03):** `oven/devices.py`, `oven/supervisor.py` (safety rules 1, 2, 3 and 9 below) and the `ovenctl.py` CLI, first used on the oven 2026-11-04 (the reliability run). Rule 10 (conveyor runs while the oven is hot) written and passed on the oven 2026-11-04.
+**Status:** plan agreed 2026-10-28. **Phase 0 done (2026-11-03):** `controller/probe.py` through an FTDI FT232R on the oven DE9 read all 16 cards and the VFD for 10 minutes with zero missed replies and zero bad frames (results under "Our own runs: Phase 0 and Phase 1" in `CLAUDE.md`). **Phase 1 mostly done (2026-11-03)** with `controller/phase1.py`: writes and the 6-byte ack confirmed, zone → heater map recorded, zone 1 confirmed as the heater-contactor enable and master cut-off, the 30-minute idle shutdown explained, conveyor run/stop confirmed. **Phase 1 done (2026-11-04):** 30-minute reliability run with all 12 zones heating to SV 100 through `ovenctl.py`: 12,131 replies, 0 missed, 0 bad frames. **Phases 2/3 started (2026-11-03):** `oven/devices.py`, `oven/supervisor.py` (safety rules 1, 2, 3 and 9 below) and the `ovenctl.py` CLI, first used on the oven 2026-11-04 (the reliability run). Rule 10 (conveyor runs while the oven is hot) written and passed on the oven 2026-11-04. **Platform decided 2026-11-24:** Raspberry Pi with a browser UI; the UI takes its look from the Testomatic projects (see "Controller platform" and "UI design").
 **Goal:** replace the vendor "TN Series Reflow Control Systems" software (see `vendor-software-issues.md` for why) with an in-house controller on a Raspberry Pi with a 10" touchscreen mounted at the oven.
 **Protocol reference:** `CLAUDE.md` (register map, frame formats, capture results).
 
@@ -37,7 +37,7 @@
    - Polling loop, safety rules (below), profiles/recipes (SV per zone + conveyor speed), and the stack light (AL2 on zone 1 = orange "heating").
    - Logs every reading and command to SQLite.
 4. **API:** FastAPI. REST for commands and configuration, WebSocket for live readings. It runs in the same process as the supervisor, but a UI fault must never stop the supervisor.
-5. **UI:** a browser page served by the controller.
+5. **UI:** browser pages served by the controller (see "UI design").
    - Zone tiles (PV, SV, output %, state), start/stop, conveyor speed, profile selection, live chart, profile capture with the T1–T4 probes, fault display.
    - Shown in Chromium kiosk mode on the touchscreen, and viewable from other PCs on the LAN.
 
@@ -50,9 +50,48 @@
 
 ### Stack
 
-- Python 3.11+, pyserial, FastAPI + uvicorn (WebSockets), SQLite.
-- Front end: plain HTML/JS plus a lightweight chart library (e.g. uPlot or Chart.js). No build step at first.
+- Python 3.11+, pyserial, FastAPI + uvicorn (WebSockets), Jinja2 templates, SQLite.
+- Front end: server-rendered pages styled with CoreUI 4.3.2 (Bootstrap 5), CoreUI Icons and Bootstrap Icons, Chart.js 4.4.0 for the live chart, and plain JavaScript (Alpine.js only if it helps). No build step. All files are kept in `web/static/`, not loaded from a CDN. Details in "UI design".
 - Deployment: a systemd service for the controller, and Chromium in kiosk mode for the touchscreen.
+
+## UI design (decided 2026-11-24)
+
+**Take the look from the SuperHouse Testomatic projects, not their framework.** `register` and `testomatic-ui` (in `~/Dropbox/src/Testomatic-projects`, each with its own `CLAUDE.md`) are Django apps with the same visual identity. OpenTorch uses FastAPI with the same front-end parts, so it looks like part of the same group.
+
+### What Testomatic uses (surveyed 2026-11-24)
+
+- **Backend:** Django 5, server-rendered templates, SQLite. One instance per tester, with a single-row settings model (`DeviceSettings`) for the tester's own configuration.
+- **Front end, no build step:** CoreUI 4.3.2 (Bootstrap 5), CoreUI Icons 3.0.1, Bootstrap Icons 1.13.1, and Chart.js 4.4.0 in Register. Layout: sidebar (SuperHouse logo at the top, product logo and version at the bottom), top bar, footer; templates `base.html` → `base-with-sidebar.html` → `partial-sidebar.html` / `partial-topnav.html` / `partial-footer.html`. testomatic-ui copies Register's `static/css/style.css` and `static/js/script.js` by hand.
+- **Live data:** none. Register's dashboard and Batches list poll every 30 s.
+- **At the device:** Raspberry Pi with a 1024 × 600 capacitive touchscreen (Elecrow 7") and Chromium in kiosk mode (`Testomatic/Notes.md`). Register's **Display mode** hides the sidebar, header, footer and page heading for a wall-screen view (`?display=1`, `body.display-mode`, the `hide-in-display-mode` class); register#125 proposes a `/kiosk` URL for it.
+
+### Why FastAPI and not Django
+
+- **OpenTorch is a long-running control loop with a UI on it.** Testomatic's apps answer a request and stop. Here the supervisor owns the serial port and makes the safety decisions all the time.
+- **Live readings matter.** A poll round takes about 2.4 s, and the operator watches the zones rise. That needs push updates (WebSocket or SSE). FastAPI has them built in, and fits the asyncio-style supervisor. Django would need Channels or a separate process.
+- **Django's main strengths are not needed.** No ORM models (profiles are TOML files, run logs are CSV, SQLite later), no admin pages, one operator at one oven.
+- **Register integration does not need Django.** If reflow runs are later recorded against a Register Batch, call Register's REST API (`X-API-Key`) as testomatic-ui does.
+- The rule that a UI fault must never stop the supervisor applies whichever framework is used.
+
+### What to take from Testomatic
+
+1. **The look:** CoreUI, the two icon sets, Chart.js, the sidebar / top bar / footer layout, the SuperHouse logo and a version in the footer. Jinja2 syntax is very close to Django templates, so the template structure carries over.
+2. **Display mode becomes the operator screen at the oven.** CoreUI is a desktop admin layout, and its sidebar wastes too much of a touchscreen. The kiosk URL on the oven's screen gives a full-screen operator view: zone tiles laid out like the oven (`media/zone-positions.svg`), the live chart, large Start / Stop controls, belt state and faults, with touch-sized targets. A browser on the LAN gets the full layout with the sidebar: profiles, run history, settings.
+3. **One settings record for the oven,** like testomatic-ui's `DeviceSettings`: serial port, belt speed calibration, cool-down threshold, time zone.
+4. **No front-end build.** Server-rendered pages plus plain JavaScript and one WebSocket client. No React or Vue.
+
+### What to do differently
+
+- **Keep every front-end file on the device, at fixed versions.** Testomatic loads its libraries from CDNs, and Register pins some at `@latest` (simplebar). The oven's Pi may have no internet, and the safety UI must not depend on it.
+- **Check Chart.js on the Pi early.** The load should be small (16 lines of about 750 points for a 30-minute run), but if redrawing is slow in Chromium on the Pi, uPlot is much lighter.
+- **Live updates, not polling.** The supervisor pushes each poll round to the browser.
+
+### Screens (to sketch next)
+
+- **Operator view** (kiosk, the default on the touchscreen): zone tiles in the oven's physical layout, live chart, profile name, belt speed and state, Start / Stop, fault banner.
+- **Profiles:** list, view and edit per-zone SVs and belt speed.
+- **Run history:** past runs with their chart, and `profile_report.py` results for probe passes.
+- **Settings:** the oven's settings record.
 
 ## Safety requirements
 
@@ -120,7 +159,8 @@ controller/
   ovenctl.py          command line on the supervisor (exists)
   oven/sim.py         simulated oven
   oven/api.py         FastAPI app
-  web/                UI (HTML/JS)
+  web/templates/      Jinja2 pages (CoreUI layout)
+  web/static/         CSS, JS, icons, Chart.js (no CDN)
   tests/
 tools/decode_capture.py   bus capture decoder (exists)
 ```
@@ -136,9 +176,11 @@ The project is a git repository (since 2026-10-28).
 - **Zone 1 reads low when cold** (11 °C against 16–22 °C) but tracked normally when hot.
 - **What drives the red lamp / buzzer** (the "Alarm Area" card, zone 2, AL2?). Needed if the controller should sound an alarm.
 
-## Open decision: controller platform (review before Phase 4)
+## Controller platform: Raspberry Pi (decided 2026-11-24)
 
-**Raised 2026-11-16, not decided.** The plan above assumes a Raspberry Pi with a browser UI. The alternative is a microcontroller with a built-in touchscreen, for example the Waveshare ESP32-P4-WIFI6-Touch-LCD-8 (8" 800 × 1280 MIPI-DSI, capacitive touch, 32 MB flash, 32 MB PSRAM, TF slot, ESP32-C6 for Wi-Fi 6 / BLE, metal case, about US$83, rated 0–60 °C, no RS-485 port). **Review this before any Phase 4 work starts**, because Phase 4 (FastAPI + web UI) is the first platform-specific work. Phases 0–3 are not affected: the protocol knowledge, safety rules and supervisor logic carry over to either platform, and the Python simulator and decoder stay useful as test tools.
+**Decided 2026-11-24: Raspberry Pi with a browser UI, as in the architecture above. The ESP32-P4 trial is not done.** The key question below was answered by the user: OpenTorch is for our own oven. It will be published in case others find it useful, but other users are unlikely and may never exist, so **optimise for our use**. The strongest argument for the ESP32-P4 (one board that other R350 owners can flash) therefore carries little weight. The look and the kiosk set-up from the Testomatic projects (see "UI design") also carry over to the Pi only. The Pi gets a read-only root filesystem (overlay filesystem) against power-loss damage, and the hardware watchdog (safety rule 4) as planned. The analysis below is kept as the record.
+
+**Raised 2026-11-16.** The plan above assumes a Raspberry Pi with a browser UI. The alternative was a microcontroller with a built-in touchscreen, for example the Waveshare ESP32-P4-WIFI6-Touch-LCD-8 (8" 800 × 1280 MIPI-DSI, capacitive touch, 32 MB flash, 32 MB PSRAM, TF slot, ESP32-C6 for Wi-Fi 6 / BLE, metal case, about US$83, rated 0–60 °C, no RS-485 port). **Review this before any Phase 4 work starts**, because Phase 4 (FastAPI + web UI) is the first platform-specific work. Phases 0–3 are not affected: the protocol knowledge, safety rules and supervisor logic carry over to either platform, and the Python simulator and decoder stay useful as test tools.
 
 **For the ESP32-P4:**
 
@@ -160,10 +202,6 @@ The project is a git repository (since 2026-10-28).
 
 **The cheaper fix if power-loss damage is the main worry:** keep the Pi with a read-only root filesystem (overlay filesystem, a `raspi-config` option). A hardware watchdog (safety rule 4) is needed on either platform, because the cards keep heating at their last command if the controller dies.
 
-**Suggested process:**
+**Process as suggested on 2026-11-16 (superseded by the decision above):** finish Phase 3 in Python; a 2–3 day ESP32-P4 trial (bus layer port, Phase 0 done test, LVGL mock-up of the zone tiles); switch only if the trial went smoothly and builds by other R350 owners were a goal, otherwise stay on the Pi with a read-only root.
 
-1. Finish Phase 3 in Python as planned (the GC10 profile run and the safety tests). This proves the logic on whichever platform wins.
-2. A time-boxed trial on the ESP32-P4 board (2–3 days): port the bus layer and repeat the Phase 0 done test (10 minutes, all 16 cards plus VFD switching, 0 missed replies), and make an LVGL mock-up of the zone-tile screen to measure the UI cost.
-3. Decide before Phase 4. Switch if the trial goes smoothly and builds by other R350 owners are a goal; otherwise stay on the Pi with a read-only root.
-
-**The key question for the review:** is OpenTorch meant to be built by other R350 owners, or only to run our oven?
+**The key question was:** is OpenTorch meant to be built by other R350 owners, or only to run our oven? **Answer (2026-11-24): only our oven, shared openly in case it is useful to others.**

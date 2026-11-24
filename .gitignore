@@ -8,3 +8,5 @@ __pycache__/
 TN_1.1.5.7/
 Resources/Instruction manual V1.0.1.0*.pdf
 Resources/manual.txt
+tools/mdb_dump/jars/
+tools/mdb_dump/*.class
